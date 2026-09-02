@@ -453,9 +453,7 @@ async def search_documents(
             with_payload=True,
         )
 
-        # ----------------------------------------------------
-        # Format results
-        # ----------------------------------------------------
+       
 
         formatted_results = []
 
@@ -534,14 +532,14 @@ async def chat_with_document(
         )
 
         search_results = qdrant.query_points(
-            collection_name=COLLECTION_NAME,
-            query=query_vector,
-            limit=3,
-            score_threshold=0.5,
-            with_payload=True,
-        )
-
+                    collection_name=COLLECTION_NAME,
+                    query=query_vector,
+                    limit=3,
+                    score_threshold=0.5,
+                    with_payload=True,
+                )
         
+                
 
         retrieved_texts = []
 
