@@ -211,68 +211,55 @@ async def delete_document(document_id: str):
 
 
 @app.post("/documents/upload")
-async def upload_document(file: UploadFile = File(...)):
-    if not file.filename or not file.filename.lower().endswith(".pdf"):
-        raise HTTPException(status_code=400, detail="Only PDF files are supported.")
+async def extract_text_from_file(file: UploadFile) -> List[dict]:
+    """
+    Factory function to extract text based on file extension.
+    Returns a list of dictionaries: [{"page_number": int, "text": str}]
+    """
+    filename = file.filename.lower()
+    file_bytes = await file.read()
+    
+    if not file_bytes:
+        raise ValueError("Uploaded file is empty.")
 
-    try:
-        file_content = await file.read()
-        if not file_content:
-            raise HTTPException(status_code=400, detail="Uploaded file is empty.")
+    pages_data = []
 
-        reader = PdfReader(io.BytesIO(file_content))
-        pdf_metadata = reader.metadata
-        title = pdf_metadata.title if pdf_metadata and pdf_metadata.title else file.filename
-        author = pdf_metadata.author if pdf_metadata else None
-        
-        document_id = str(uuid.uuid4())
-        points_to_insert = []
-        total_chunks = 0
-
+    # ----------------------------------------------------
+    # PDF PARSER
+    # ----------------------------------------------------
+    if filename.endswith(".pdf"):
+        reader = PdfReader(io.BytesIO(file_bytes))
         for page_num, page in enumerate(reader.pages):
-            cleaned_text = clean_text(page.extract_text())
-            if not cleaned_text:
-                continue
-
-            text_chunks = chunk_text(cleaned_text)
-            for chunk_index, chunk_str in enumerate(text_chunks):
-                vector = create_embedding(chunk_str)
-                chunk_id = str(uuid.uuid4())
-
-                payload = {
-                    "document_id": document_id,
-                    "filename": file.filename,
-                    "title": title,
-                    "author": author,
+            text = page.extract_text()
+            if text:
+                pages_data.append({
                     "page_number": page_num + 1,
-                    "chunk_index": chunk_index,
-                    "text": chunk_str,
-                }
+                    "text": text
+                })
+                
+    # ----------------------------------------------------
+    # TXT / MARKDOWN PARSER
+    # ----------------------------------------------------
+    elif filename.endswith(".txt") or filename.endswith(".md"):
+        try:
+            # Decode raw bytes to string
+            text = file_bytes.decode("utf-8")
+            # For plain text, we treat the entire file as "Page 1"
+            if text.strip():
+                pages_data.append({
+                    "page_number": 1,
+                    "text": text
+                })
+        except UnicodeDecodeError:
+            raise ValueError("File is not a valid UTF-8 encoded text document.")
+            
+    # ----------------------------------------------------
+    # UNSUPPORTED
+    # ----------------------------------------------------
+    else:
+        raise ValueError("Unsupported file type. Please upload .pdf, .txt, or .md")
 
-                points_to_insert.append(PointStruct(id=chunk_id, vector=vector, payload=payload))
-                total_chunks += 1
-
-        if not points_to_insert:
-            raise HTTPException(status_code=400, detail="No readable text found in PDF.")
-
-        qdrant.upsert(collection_name=COLLECTION_NAME, points=points_to_insert)
-
-        document_registry[document_id] = {
-            "document_id": document_id,
-            "filename": file.filename,
-            "title": title,
-            "author": author,
-            "total_pages": len(reader.pages),
-            "chunks_inserted": total_chunks,
-        }
-
-        return {"message": "Document ingested successfully", "document_id": document_id, "chunks_inserted": total_chunks}
-
-    except HTTPException:
-        raise
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Document processing error: {str(e)}")
-
+    return pages_data
 
 # ------------------------------------------------------------
 # SEMANTIC SEARCH
