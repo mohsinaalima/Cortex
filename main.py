@@ -57,17 +57,15 @@ print("Reranker loaded!")
 # QDRANT VECTOR DATABASE
 # ============================================================
 print("Initializing Qdrant...")
-qdrant = QdrantClient(path="local_qdrant")
-COLLECTION_NAME = "second_brain_chunks"
-
-if not qdrant.collection_exists(COLLECTION_NAME):
-    qdrant.create_collection(
-        collection_name=COLLECTION_NAME,
-        vectors_config=VectorParams(size=VECTOR_SIZE, distance=Distance.COSINE),
-    )
-    print(f"Created Qdrant collection: {COLLECTION_NAME}")
+qdrant_host = os.getenv("QDRANT_HOST")
+if qdrant_host:
+    # Connect to the Qdrant Docker container
+    print(f"Connecting to Qdrant at {qdrant_host}...")
+    qdrant = QdrantClient(host=qdrant_host, port=int(os.getenv("QDRANT_PORT", 6333)))
 else:
-    print(f"Qdrant collection already exists: {COLLECTION_NAME}")
+    # Fallback to local folder if running without Docker
+    print("Initializing local Qdrant...")
+    qdrant = QdrantClient(path="local_qdrant")
 
 print("Qdrant ready!")
 
