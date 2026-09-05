@@ -1,5 +1,4 @@
-﻿venv/
-.env
+﻿.env
+venv/
 __pycache__/
-*.pyc
 local_qdrant/
