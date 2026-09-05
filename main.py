@@ -2,6 +2,7 @@ import os
 import io
 import uuid
 import re
+from fastapi.middleware.cors import CORSMiddleware
 from typing import List, Optional
 
 from fastapi import FastAPI, UploadFile, File, HTTPException
@@ -43,6 +44,14 @@ client = Groq(api_key=GROQ_API_KEY)
 # ============================================================
 # EMBEDDING & RERANKER MODELS
 # ============================================================
+
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],  
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
 print("Loading embedding model (Bi-Encoder)...")
 embedding_model = SentenceTransformer("all-MiniLM-L6-v2")
 VECTOR_SIZE = 384

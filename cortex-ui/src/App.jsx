@@ -1,122 +1,133 @@
-import { useState } from 'react'
-import heroImg from './assets/hero.png'
-import reactLogo from './assets/react.svg'
-import viteLogo from './assets/vite.svg'
-import './App.css'
+import { useState, useEffect } from "react";
+import axios from "axios";
+import { Upload, FileText, Trash2, BrainCircuit } from "lucide-react";
 
-function App() {
-  const [count, setCount] = useState(0)
+const API_BASE = "http://127.0.0.1:8000";
+
+export default function App() {
+  const [documents, setDocuments] = useState([]);
+  const [isUploading, setIsUploading] = useState(false);
+
+  // Fetch documents on load
+  const fetchDocuments = async () => {
+    try {
+      const res = await axios.get(`${API_BASE}/documents`);
+      setDocuments(res.data.documents);
+    } catch (error) {
+      console.error("Failed to fetch documents:", error);
+    }
+  };
+
+  useEffect(() => {
+    fetchDocuments();
+  }, []);
+
+  // Handle File Upload
+  const handleFileUpload = async (e) => {
+    if (!e.target.files || e.target.files.length === 0) return;
+    const file = e.target.files[0];
+
+    const formData = new FormData();
+    formData.append("file", file);
+
+    setIsUploading(true);
+    try {
+      await axios.post(`${API_BASE}/documents/upload`, formData, {
+        headers: { "Content-Type": "multipart/form-data" },
+      });
+      fetchDocuments(); // Refresh the list
+    } catch (error) {
+      console.error("Upload failed:", error);
+      alert("Upload failed. Check console for details.");
+    } finally {
+      setIsUploading(false);
+      e.target.value = ""; // Reset input
+    }
+  };
+
+  // Handle File Delete
+  const handleDelete = async (id) => {
+    try {
+      await axios.delete(`${API_BASE}/documents/${id}`);
+      fetchDocuments();
+    } catch (error) {
+      console.error("Delete failed:", error);
+    }
+  };
 
   return (
-    <>
-      <section id="center">
-        <div className="hero">
-          <img src={heroImg} className="base" width="170" height="179" alt="" />
-          <img src={reactLogo} className="framework" alt="React logo" />
-          <img src={viteLogo} className="vite" alt="Vite logo" />
+    <div className='flex h-screen bg-gray-900 text-gray-100 font-sans'>
+      {/* SIDEBAR - Document Manager */}
+      <div className='w-80 bg-gray-950 border-r border-gray-800 flex flex-col'>
+        <div className='p-5 border-b border-gray-800 flex items-center gap-3'>
+          <BrainCircuit className='text-emerald-500' size={28} />
+          <h1 className='text-xl font-bold tracking-wide'>Cortex UI</h1>
         </div>
-        <div>
-          <h1>Get started</h1>
+
+        <div className='p-4 flex-grow overflow-y-auto'>
+          <h2 className='text-xs font-semibold text-gray-500 uppercase tracking-wider mb-4'>
+            Knowledge Base
+          </h2>
+
+          {documents.length === 0 ? (
+            <p className='text-sm text-gray-500 italic'>
+              No documents uploaded yet.
+            </p>
+          ) : (
+            <ul className='space-y-2'>
+              {documents.map((doc) => (
+                <li
+                  key={doc.document_id}
+                  className='flex items-center justify-between p-3 bg-gray-900 rounded-lg border border-gray-800 group hover:border-gray-700 transition-colors'
+                >
+                  <div className='flex items-center gap-3 overflow-hidden'>
+                    <FileText
+                      size={16}
+                      className='text-emerald-500 flex-shrink-0'
+                    />
+                    <span className='text-sm truncate'>{doc.filename}</span>
+                  </div>
+                  <button
+                    onClick={() => handleDelete(doc.document_id)}
+                    className='text-gray-500 hover:text-red-400 opacity-0 group-hover:opacity-100 transition-opacity'
+                  >
+                    <Trash2 size={16} />
+                  </button>
+                </li>
+              ))}
+            </ul>
+          )}
+        </div>
+
+        <div className='p-4 border-t border-gray-800'>
+          <label
+            className={`flex items-center justify-center gap-2 w-full p-3 rounded-lg cursor-pointer transition-colors ${isUploading ? "bg-gray-800 text-gray-500" : "bg-emerald-600 hover:bg-emerald-500 text-white"}`}
+          >
+            <Upload size={18} />
+            <span className='text-sm font-medium'>
+              {isUploading ? "Ingesting Data..." : "Upload Document"}
+            </span>
+            <input
+              type='file'
+              className='hidden'
+              accept='.pdf,.txt,.md'
+              onChange={handleFileUpload}
+              disabled={isUploading}
+            />
+          </label>
+        </div>
+      </div>
+
+      {/* MAIN CHAT AREA (Placeholder for now) */}
+      <div className='flex-1 flex items-center justify-center bg-gray-900'>
+        <div className='text-center text-gray-500'>
+          <BrainCircuit size={48} className='mx-auto mb-4 opacity-20' />
           <p>
-            Edit <code>src/App.jsx</code> and save to test <code>HMR</code>
+            Select a document or start typing to interact with your Second
+            Brain.
           </p>
         </div>
-        <button
-          type="button"
-          className="counter"
-          onClick={() => setCount((count) => count + 1)}
-        >
-          Count is {count}
-        </button>
-      </section>
-
-      <div className="ticks"></div>
-
-      <section id="next-steps">
-        <div id="docs">
-          <svg className="icon" role="presentation" aria-hidden="true">
-            <use href="/icons.svg#documentation-icon"></use>
-          </svg>
-          <h2>Documentation</h2>
-          <p>Your questions, answered</p>
-          <ul>
-            <li>
-              <a href="https://vite.dev/" target="_blank">
-                <img className="logo" src={viteLogo} alt="" />
-                Explore Vite
-              </a>
-            </li>
-            <li>
-              <a href="https://react.dev/" target="_blank">
-                <img className="button-icon" src={reactLogo} alt="" />
-                Learn more
-              </a>
-            </li>
-          </ul>
-        </div>
-        <div id="social">
-          <svg className="icon" role="presentation" aria-hidden="true">
-            <use href="/icons.svg#social-icon"></use>
-          </svg>
-          <h2>Connect with us</h2>
-          <p>Join the Vite community</p>
-          <ul>
-            <li>
-              <a href="https://github.com/vitejs/vite" target="_blank">
-                <svg
-                  className="button-icon"
-                  role="presentation"
-                  aria-hidden="true"
-                >
-                  <use href="/icons.svg#github-icon"></use>
-                </svg>
-                GitHub
-              </a>
-            </li>
-            <li>
-              <a href="https://chat.vite.dev/" target="_blank">
-                <svg
-                  className="button-icon"
-                  role="presentation"
-                  aria-hidden="true"
-                >
-                  <use href="/icons.svg#discord-icon"></use>
-                </svg>
-                Discord
-              </a>
-            </li>
-            <li>
-              <a href="https://x.com/vite_js" target="_blank">
-                <svg
-                  className="button-icon"
-                  role="presentation"
-                  aria-hidden="true"
-                >
-                  <use href="/icons.svg#x-icon"></use>
-                </svg>
-                X.com
-              </a>
-            </li>
-            <li>
-              <a href="https://bsky.app/profile/vite.dev" target="_blank">
-                <svg
-                  className="button-icon"
-                  role="presentation"
-                  aria-hidden="true"
-                >
-                  <use href="/icons.svg#bluesky-icon"></use>
-                </svg>
-                Bluesky
-              </a>
-            </li>
-          </ul>
-        </div>
-      </section>
-
-      <div className="ticks"></div>
-      <section id="spacer"></section>
-    </>
-  )
+      </div>
+    </div>
+  );
 }
-
-export default App
