@@ -1,0 +1,56 @@
+generator client {
+  provider = "prisma-client"
+  output   = "../generated/prisma"
+}
+
+datasource db {
+  provider = "postgresql"
+}
+
+model Source {
+  id              String   @id @default(uuid())
+  filename        String
+  title           String
+  sourceType      String
+  chunksInserted  Int      @default(0)
+  summary         String?
+  keyPoints       Json?
+  easyExplanation String?
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+  messages        ChatMessage[]
+  chunks          SourceChunk[]
+}
+
+model SourceChunk {
+  id        String   @id @default(uuid())
+  chunkIndex Int
+  content   String
+  sourceId  String
+  createdAt DateTime @default(now())
+  source    Source   @relation(fields: [sourceId], references: [id], onDelete: Cascade)
+
+  @@unique([sourceId, chunkIndex])
+  @@index([sourceId])
+}
+
+model ChatSession {
+  id        String        @id @default(uuid())
+  createdAt DateTime      @default(now())
+  updatedAt DateTime      @updatedAt
+  messages  ChatMessage[]
+}
+
+model ChatMessage {
+  id        String      @id @default(uuid())
+  role      String
+  content   String
+  createdAt DateTime    @default(now())
+  sessionId String
+  sourceId  String?
+  session   ChatSession @relation(fields: [sessionId], references: [id], onDelete: Cascade)
+  source    Source?     @relation(fields: [sourceId], references: [id], onDelete: SetNull)
+
+  @@index([sessionId, createdAt])
+  @@index([sourceId])
+}

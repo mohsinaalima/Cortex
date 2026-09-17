@@ -3,3 +3,5 @@ venv/
 __pycache__/
 local_qdrant/
 local_qdrant.backup-*/
+generated/prisma/
+node_modules/

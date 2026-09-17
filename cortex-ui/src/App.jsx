@@ -8,6 +8,7 @@ import {
   Image as ImageIcon,
   Plus,
   Send,
+  MessageSquare,
 } from "lucide-react";
 import ReactMarkdown from "react-markdown";
 
@@ -20,15 +21,25 @@ export default function App() {
   const [activeSource, setActiveSource] = useState(null);
   const [showAddMenu, setShowAddMenu] = useState(false);
 
-  const [messages, setMessages] = useState([]);
+  // 1. Initialize messages from localStorage to save search/chat history
+  const [messages, setMessages] = useState(() => {
+    const saved = localStorage.getItem("cortex_chat_history");
+    return saved ? JSON.parse(saved) : [];
+  });
+
   const [inputMessage, setInputMessage] = useState("");
   const [isTyping, setIsTyping] = useState(false);
 
   const messagesEndRef = useRef(null);
 
+  // 2. Save messages to localStorage whenever they change
+  useEffect(() => {
+    localStorage.setItem("cortex_chat_history", JSON.stringify(messages));
+  }, [messages]);
+
   useEffect(() => {
     messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
-  }, [messages]);
+  }, [messages, isTyping]);
 
   const fetchDocuments = async () => {
     try {
@@ -45,10 +56,10 @@ export default function App() {
 
   const getSourceIcon = (type) => {
     if (type === "url")
-      return <Link size={16} className='text-blue-500 flex-shrink-0' />;
+      return <Link size={16} className='text-blue-400 flex-shrink-0' />;
     if (type === "image")
-      return <ImageIcon size={16} className='text-purple-500 flex-shrink-0' />;
-    return <FileText size={16} className='text-emerald-500 flex-shrink-0' />;
+      return <ImageIcon size={16} className='text-purple-400 flex-shrink-0' />;
+    return <FileText size={16} className='text-emerald-400 flex-shrink-0' />;
   };
 
   const handleAddUrl = async () => {
@@ -139,43 +150,61 @@ export default function App() {
     }
   };
 
+  // 3. Clear History Function
+  const clearHistory = () => {
+    if (window.confirm("Are you sure you want to clear your chat history?")) {
+      setMessages([]);
+      localStorage.removeItem("cortex_chat_history");
+    }
+  };
+
   return (
-    <div className='flex h-screen bg-gray-900 text-gray-100 font-sans'>
+    <div className='flex h-screen bg-[#0B0F19] text-slate-200 font-sans selection:bg-emerald-500/30'>
       {/* SIDEBAR */}
-      <div className='w-80 bg-gray-950 border-r border-gray-800 flex flex-col z-20'>
-        <div className='p-5 border-b border-gray-800 flex items-center gap-3'>
-          <BrainCircuit className='text-emerald-500' size={28} />
-          <h1 className='text-xl font-bold tracking-wide'>Cortex UI</h1>
+      <div className='w-80 bg-slate-950/50 border-r border-slate-800/60 flex flex-col z-20 backdrop-blur-xl shadow-xl'>
+        <div className='p-6 flex items-center gap-3'>
+          <div className='p-2 bg-emerald-500/10 rounded-xl border border-emerald-500/20 shadow-inner'>
+            <BrainCircuit className='text-emerald-400' size={26} />
+          </div>
+          <h1 className='text-xl font-bold tracking-wide bg-gradient-to-r from-white to-slate-400 bg-clip-text text-transparent'>
+            Cortex
+          </h1>
         </div>
 
-        <div className='p-4 flex-grow overflow-y-auto'>
-          <h2 className='text-xs font-semibold text-gray-500 uppercase tracking-wider mb-4'>
+        <div className='px-4 flex-grow overflow-y-auto custom-scrollbar pb-6'>
+          <h2 className='text-[11px] font-bold text-slate-500 uppercase tracking-widest mb-4 px-2'>
             Knowledge Base
           </h2>
           {documents.length === 0 ? (
-            <p className='text-sm text-gray-500 italic'>
+            <div className='text-sm text-slate-500 italic px-2 bg-slate-900/50 p-4 rounded-xl border border-slate-800/50 text-center'>
               No sources added yet.
-            </p>
+            </div>
           ) : (
             <ul className='space-y-2'>
               {documents.map((doc) => (
                 <li
                   key={doc.document_id}
                   onClick={() => setActiveSource(doc)}
-                  className={`flex items-center justify-between p-3 rounded-lg border cursor-pointer transition-colors ${activeSource?.document_id === doc.document_id ? "bg-gray-800 border-emerald-500" : "bg-gray-900 border-gray-800 hover:border-gray-700"}`}
+                  className={`group flex items-center justify-between p-3.5 rounded-xl border cursor-pointer transition-all duration-200 ${
+                    activeSource?.document_id === doc.document_id
+                      ? "bg-slate-800/80 border-emerald-500/50 shadow-md shadow-emerald-900/10"
+                      : "bg-slate-900/40 border-slate-800/50 hover:border-slate-700 hover:bg-slate-800/60"
+                  }`}
                 >
                   <div className='flex items-center gap-3 overflow-hidden'>
                     {getSourceIcon(doc.source_type)}
-                    <span className='text-sm truncate'>{doc.filename}</span>
+                    <span className='text-sm truncate font-medium text-slate-300 group-hover:text-white transition-colors'>
+                      {doc.filename}
+                    </span>
                   </div>
                   <button
                     onClick={(e) => {
                       e.stopPropagation();
                       handleDelete(doc.document_id);
                     }}
-                    className='text-gray-500 hover:text-red-400'
+                    className='text-slate-500 hover:text-red-400 opacity-0 group-hover:opacity-100 transition-all bg-slate-950 p-1.5 rounded-md hover:bg-red-500/10'
                   >
-                    <Trash2 size={16} />
+                    <Trash2 size={14} />
                   </button>
                 </li>
               ))}
@@ -183,18 +212,18 @@ export default function App() {
           )}
         </div>
 
-        <div className='p-4 border-t border-gray-800 relative'>
+        <div className='p-4 relative bg-slate-950/80 border-t border-slate-800/60'>
           {isProcessing && (
-            <div className='mb-3 text-xs text-emerald-400 animate-pulse text-center font-medium tracking-wide'>
+            <div className='mb-3 text-xs text-emerald-400 animate-pulse text-center font-medium tracking-wide flex justify-center items-center gap-2'>
+              <div className='w-4 h-4 border-2 border-emerald-500 border-t-transparent rounded-full animate-spin'></div>
               {processStatus}
             </div>
           )}
 
           {showAddMenu && !isProcessing && (
-            <div className='absolute bottom-16 left-4 right-4 bg-gray-800 border border-gray-700 rounded-lg p-2 flex flex-col gap-1 shadow-xl z-50'>
-              <label className='flex items-center gap-3 p-3 hover:bg-gray-700 rounded cursor-pointer text-sm font-medium transition-colors'>
-                <FileText size={16} className='text-emerald-400' /> Add PDF /
-                Document
+            <div className='absolute bottom-[4.5rem] left-4 right-4 bg-slate-900 border border-slate-700 rounded-xl p-1.5 flex flex-col gap-1 shadow-2xl z-50 backdrop-blur-md'>
+              <label className='flex items-center gap-3 p-3 hover:bg-slate-800 rounded-lg cursor-pointer text-sm font-medium transition-colors text-slate-300 hover:text-white'>
+                <FileText size={16} className='text-emerald-400' /> Add Document
                 <input
                   type='file'
                   className='hidden'
@@ -202,7 +231,7 @@ export default function App() {
                   onChange={(e) => handleFileUpload(e, "documents/upload")}
                 />
               </label>
-              <label className='flex items-center gap-3 p-3 hover:bg-gray-700 rounded cursor-pointer text-sm font-medium transition-colors'>
+              <label className='flex items-center gap-3 p-3 hover:bg-slate-800 rounded-lg cursor-pointer text-sm font-medium transition-colors text-slate-300 hover:text-white'>
                 <ImageIcon size={16} className='text-purple-400' /> Add Image
                 <input
                   type='file'
@@ -213,7 +242,7 @@ export default function App() {
               </label>
               <button
                 onClick={handleAddUrl}
-                className='flex items-center gap-3 p-3 hover:bg-gray-700 rounded text-left text-sm font-medium transition-colors'
+                className='flex items-center gap-3 p-3 hover:bg-slate-800 rounded-lg text-left text-sm font-medium transition-colors text-slate-300 hover:text-white'
               >
                 <Link size={16} className='text-blue-400' /> Add Link
               </button>
@@ -223,14 +252,18 @@ export default function App() {
           <button
             onClick={() => setShowAddMenu(!showAddMenu)}
             disabled={isProcessing}
-            className={`flex items-center justify-center gap-2 w-full p-3 rounded-lg transition-colors font-medium text-sm ${isProcessing ? "bg-gray-800 text-gray-500 cursor-not-allowed border border-gray-700" : "bg-emerald-600 hover:bg-emerald-500 text-white"}`}
+            className={`flex items-center justify-center gap-2 w-full p-3.5 rounded-xl transition-all font-medium text-sm shadow-lg active:scale-[0.98] ${
+              isProcessing
+                ? "bg-slate-800 text-slate-500 cursor-not-allowed border border-slate-700"
+                : "bg-gradient-to-r from-emerald-600 to-teal-600 hover:from-emerald-500 hover:to-teal-500 text-white border border-emerald-400/20 shadow-emerald-900/20"
+            }`}
           >
             <Plus
               size={18}
               className={
                 showAddMenu
-                  ? "rotate-45 transition-transform"
-                  : "transition-transform"
+                  ? "rotate-45 transition-transform duration-300"
+                  : "transition-transform duration-300"
               }
             />
             {isProcessing ? "Working..." : "Add Source"}
@@ -239,32 +272,33 @@ export default function App() {
       </div>
 
       {/* MAIN CONTENT AREA */}
-      <div className='flex-1 flex flex-col bg-gray-900 relative'>
+      <div className='flex-1 flex flex-col relative'>
         {/* Top Context & Summary Panel */}
         {activeSource ? (
-          <div className='p-5 border-b border-gray-800 bg-gray-950/50 shadow-sm shrink-0 z-10'>
-            <div className='flex items-center gap-2 text-emerald-400 font-semibold mb-3 text-lg'>
-              {getSourceIcon(activeSource.source_type)}
-              <span>{activeSource.title || activeSource.filename}</span>
+          <div className='p-6 border-b border-slate-800/60 bg-slate-950/40 backdrop-blur-md shadow-sm shrink-0 z-10'>
+            <div className='flex items-center justify-between mb-4'>
+              <div className='flex items-center gap-3 text-emerald-400 font-semibold text-lg'>
+                {getSourceIcon(activeSource.source_type)}
+                <span>{activeSource.title || activeSource.filename}</span>
+              </div>
             </div>
 
             {activeSource.summary && (
-              <div className='bg-gray-900 border border-gray-800 rounded-lg p-5 text-sm max-h-60 overflow-y-auto custom-scrollbar'>
-                <h3 className='text-gray-200 font-bold mb-2 uppercase tracking-wider text-xs'>
+              <div className='bg-slate-900/60 border border-slate-800/80 rounded-xl p-5 text-sm max-h-[30vh] overflow-y-auto custom-scrollbar shadow-inner'>
+                <h3 className='text-slate-300 font-bold mb-2 uppercase tracking-wider text-xs'>
                   Short Summary
                 </h3>
-                <p className='text-gray-400 mb-5 leading-relaxed'>
+                <p className='text-slate-400 mb-5 leading-relaxed'>
                   {activeSource.summary}
                 </p>
 
-                {/* BULLETPROOF ARRAY CHECK */}
                 {Array.isArray(activeSource.key_points) &&
                   activeSource.key_points.length > 0 && (
                     <>
-                      <h3 className='text-gray-200 font-bold mb-2 uppercase tracking-wider text-xs'>
+                      <h3 className='text-slate-300 font-bold mb-2 uppercase tracking-wider text-xs mt-4'>
                         Key Points
                       </h3>
-                      <ul className='list-disc list-inside text-gray-400 mb-5 space-y-1.5 leading-relaxed'>
+                      <ul className='list-disc list-inside text-slate-400 mb-5 space-y-2 leading-relaxed marker:text-emerald-500'>
                         {activeSource.key_points.map((pt, i) => (
                           <li key={i}>{pt}</li>
                         ))}
@@ -274,10 +308,10 @@ export default function App() {
 
                 {activeSource.easy_explanation && (
                   <>
-                    <h3 className='text-gray-200 font-bold mb-2 uppercase tracking-wider text-xs'>
+                    <h3 className='text-slate-300 font-bold mb-2 uppercase tracking-wider text-xs mt-4'>
                       Easy Explanation
                     </h3>
-                    <p className='text-gray-400 leading-relaxed bg-gray-800/50 p-3 rounded border border-gray-700/50 italic'>
+                    <p className='text-slate-400 leading-relaxed bg-slate-800/50 p-4 rounded-lg border border-slate-700/50 italic'>
                       {activeSource.easy_explanation}
                     </p>
                   </>
@@ -286,18 +320,37 @@ export default function App() {
             )}
           </div>
         ) : (
-          <div className='p-4 border-b border-gray-800 bg-gray-950/50 text-center text-gray-500 text-sm shrink-0'>
-            No active source selected. Global knowledge chat is active.
+          <div className='px-6 py-4 border-b border-slate-800/60 bg-slate-950/40 backdrop-blur-md text-slate-400 text-sm shrink-0 flex items-center justify-between'>
+            <div className='flex items-center gap-2'>
+              <BrainCircuit size={16} className='text-emerald-500' />
+              <span>Global knowledge chat is active.</span>
+            </div>
+            {messages.length > 0 && (
+              <button
+                onClick={clearHistory}
+                className='text-xs font-medium bg-slate-800 hover:bg-red-500/20 text-slate-300 hover:text-red-400 px-3 py-1.5 rounded-lg border border-slate-700 hover:border-red-500/30 transition-all flex items-center gap-2'
+              >
+                <Trash2 size={12} /> Clear History
+              </button>
+            )}
           </div>
         )}
 
         {/* Chat Message Window */}
-        <div className='flex-1 overflow-y-auto p-6 space-y-6 pb-32'>
+        <div className='flex-1 overflow-y-auto p-6 md:p-8 space-y-8 pb-36 custom-scrollbar'>
           {messages.length === 0 ? (
-            <div className='h-full flex flex-col items-center justify-center text-gray-500 opacity-60'>
-              <BrainCircuit size={72} className='mb-6 opacity-20' />
-              <p className='text-lg'>
-                Ask Cortex a question about your knowledge base...
+            <div className='h-full flex flex-col items-center justify-center text-slate-500 opacity-80'>
+              <div className='p-6 bg-slate-900/50 rounded-3xl border border-slate-800 shadow-xl mb-6'>
+                <MessageSquare
+                  size={48}
+                  className='opacity-40 text-emerald-500'
+                />
+              </div>
+              <p className='text-lg font-medium text-slate-300'>
+                How can I help you today?
+              </p>
+              <p className='text-sm mt-2'>
+                Ask a question about your documents to get started.
               </p>
             </div>
           ) : (
@@ -306,19 +359,19 @@ export default function App() {
                 key={i}
                 className={`flex ${
                   msg.role === "user" ? "justify-end" : "justify-start"
-                }`}
+                } animate-in slide-in-from-bottom-2 duration-300`}
               >
                 <div
-                  className={`max-w-[75%] p-4 rounded-2xl ${
+                  className={`max-w-[80%] md:max-w-[70%] p-5 rounded-2xl leading-relaxed shadow-sm ${
                     msg.role === "user"
-                      ? "bg-emerald-600 text-white rounded-br-none"
-                      : "bg-gray-800 text-gray-200 rounded-bl-none border border-gray-700 shadow-sm"
+                      ? "bg-gradient-to-br from-emerald-600 to-teal-700 text-white rounded-br-sm shadow-emerald-900/20"
+                      : "bg-slate-900 border border-slate-800 text-slate-200 rounded-bl-sm"
                   }`}
                 >
                   {msg.role === "user" ? (
                     msg.content
                   ) : (
-                    <div className='markdown-styles'>
+                    <div className='prose prose-invert prose-emerald max-w-none prose-p:leading-relaxed prose-pre:bg-slate-950 prose-pre:border prose-pre:border-slate-800'>
                       <ReactMarkdown>{msg.content}</ReactMarkdown>
                     </div>
                   )}
@@ -326,29 +379,30 @@ export default function App() {
               </div>
             ))
           )}
+
           {isTyping && (
-            <div className='flex justify-start'>
-              <div className='bg-gray-800 p-4 rounded-2xl rounded-bl-none border border-gray-700 text-gray-400 text-sm flex items-center gap-2'>
+            <div className='flex justify-start animate-in fade-in'>
+              <div className='bg-slate-900 border border-slate-800 p-5 rounded-2xl rounded-bl-sm shadow-sm flex items-center gap-2'>
                 <div className='w-2 h-2 bg-emerald-500 rounded-full animate-bounce'></div>
                 <div
                   className='w-2 h-2 bg-emerald-500 rounded-full animate-bounce'
-                  style={{ animationDelay: "0.2s" }}
+                  style={{ animationDelay: "0.15s" }}
                 ></div>
                 <div
                   className='w-2 h-2 bg-emerald-500 rounded-full animate-bounce'
-                  style={{ animationDelay: "0.4s" }}
+                  style={{ animationDelay: "0.3s" }}
                 ></div>
               </div>
             </div>
           )}
-          <div ref={messagesEndRef} />
+          <div ref={messagesEndRef} className='h-4' />
         </div>
 
         {/* Chat Input form */}
-        <div className='absolute bottom-0 left-0 right-0 p-5 bg-gray-950/95 backdrop-blur border-t border-gray-800'>
+        <div className='absolute bottom-0 left-0 right-0 p-6 bg-gradient-to-t from-[#0B0F19] via-[#0B0F19]/90 to-transparent pt-12'>
           <form
             onSubmit={handleSendMessage}
-            className='flex gap-3 max-w-5xl mx-auto'
+            className='flex gap-3 max-w-4xl mx-auto relative group'
           >
             <input
               type='text'
@@ -359,18 +413,18 @@ export default function App() {
                   ? `Ask about ${activeSource.filename}...`
                   : "Ask a general question..."
               }
-              className='flex-1 bg-gray-900 border border-gray-700 rounded-xl px-5 py-3.5 focus:outline-none focus:border-emerald-500 transition-colors shadow-inner'
+              className='flex-1 bg-slate-900/90 backdrop-blur-xl border border-slate-700 rounded-2xl px-6 py-4 focus:outline-none focus:border-emerald-500 focus:ring-1 focus:ring-emerald-500 transition-all shadow-xl text-slate-200 placeholder:text-slate-500'
             />
             <button
               type='submit'
               disabled={isTyping || !inputMessage.trim()}
-              className='bg-emerald-600 hover:bg-emerald-500 disabled:bg-gray-800 disabled:text-gray-600 text-white p-3.5 rounded-xl transition-colors shadow-sm'
+              className='absolute right-2 top-2 bottom-2 bg-emerald-600 hover:bg-emerald-500 disabled:bg-slate-800 disabled:text-slate-600 text-white p-3 rounded-xl transition-all shadow-md active:scale-95 disabled:active:scale-100 flex items-center justify-center aspect-square'
             >
               <Send
-                size={22}
+                size={20}
                 className={
                   inputMessage.trim() && !isTyping
-                    ? "translate-x-0.5 transition-transform"
+                    ? "translate-x-0.5 -translate-y-0.5 transition-transform"
                     : ""
                 }
               />
@@ -378,6 +432,27 @@ export default function App() {
           </form>
         </div>
       </div>
+
+      {/* Global Styles for Custom Scrollbar & Tailwind Prose adjustments */}
+      <style
+        dangerouslySetInnerHTML={{
+          __html: `
+        .custom-scrollbar::-webkit-scrollbar {
+          width: 6px;
+        }
+        .custom-scrollbar::-webkit-scrollbar-track {
+          background: transparent;
+        }
+        .custom-scrollbar::-webkit-scrollbar-thumb {
+          background-color: #334155;
+          border-radius: 10px;
+        }
+        .custom-scrollbar::-webkit-scrollbar-thumb:hover {
+          background-color: #475569;
+        }
+      `,
+        }}
+      />
     </div>
   );
 }

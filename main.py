@@ -13,6 +13,8 @@ from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 from pypdf import PdfReader
 from dotenv import load_dotenv
+import psycopg
+from psycopg.rows import dict_row
 
 # Machine Learning & AI
 from sentence_transformers import SentenceTransformer, CrossEncoder
@@ -38,12 +40,16 @@ load_dotenv()
 GEMINI_API_KEY = os.getenv("GEMINI_API_KEY") or os.getenv("GOOGLE_API_KEY")
 LLM_MODEL = os.getenv("GEMINI_MODEL", "gemini-3.6-flash")
 VISION_MODEL = os.getenv("GEMINI_VISION_MODEL", "gemini-3.6-flash")
+DATABASE_URL = os.getenv("DATABASE_URL")
 
 if not GEMINI_API_KEY:
     raise RuntimeError(
         "Gemini API key is missing. Add GEMINI_API_KEY=your_gemini_api_key "
         "(or GOOGLE_API_KEY=your_gemini_api_key) to your .env file."
     )
+
+if not DATABASE_URL:
+    raise RuntimeError("DATABASE_URL is missing. Add your Neon PostgreSQL connection string to .env.")
 
 # ============================================================
 # INITIALIZE CLIENTS & APP
@@ -80,7 +86,7 @@ print("Reranker loaded!")
 # QDRANT SETUP
 # ============================================================
 print("Initializing Qdrant...")
-qdrant = QdrantClient(path="local_qdrant")
+qdrant = QdrantClient(host="localhost", port=6333)
 COLLECTION_NAME = "second_brain_chunks"
 
 if not qdrant.collection_exists(COLLECTION_NAME):
@@ -121,6 +127,120 @@ document_registry = {}
 # ============================================================
 # HELPER FUNCTIONS
 # ============================================================
+def get_db_connection():
+    return psycopg.connect(DATABASE_URL, row_factory=dict_row, connect_timeout=10)
+
+
+def save_source(source: dict) -> None:
+    """Persist source metadata while Qdrant retains the embedding vectors."""
+    with get_db_connection() as conn, conn.cursor() as cur:
+        cur.execute(
+            '''
+            INSERT INTO "Source" (
+                "id", "filename", "title", "sourceType", "chunksInserted",
+                "summary", "keyPoints", "easyExplanation", "createdAt", "updatedAt"
+            ) VALUES (%s, %s, %s, %s, %s, %s, %s::jsonb, %s, NOW(), NOW())
+            ON CONFLICT ("id") DO UPDATE SET
+                "filename" = EXCLUDED."filename",
+                "title" = EXCLUDED."title",
+                "sourceType" = EXCLUDED."sourceType",
+                "chunksInserted" = EXCLUDED."chunksInserted",
+                "summary" = EXCLUDED."summary",
+                "keyPoints" = EXCLUDED."keyPoints",
+                "easyExplanation" = EXCLUDED."easyExplanation",
+                "updatedAt" = NOW()
+            ''',
+            (
+                source["document_id"], source["filename"], source["title"],
+                source["source_type"], source["chunks_inserted"], source.get("summary"),
+                json.dumps(source.get("key_points", [])), source.get("easy_explanation"),
+            ),
+        )
+
+
+def load_sources() -> dict:
+    with get_db_connection() as conn, conn.cursor() as cur:
+        cur.execute('SELECT * FROM "Source" ORDER BY "createdAt" DESC')
+        rows = cur.fetchall()
+    return {
+        row["id"]: {
+            "document_id": row["id"],
+            "filename": row["filename"],
+            "title": row["title"],
+            "source_type": row["sourceType"],
+            "chunks_inserted": row["chunksInserted"],
+            "summary": row["summary"] or "",
+            "key_points": row["keyPoints"] or [],
+            "easy_explanation": row["easyExplanation"] or "",
+        }
+        for row in rows
+    }
+
+
+def save_source_chunks(source_id: str, chunks: List[str]) -> None:
+    """Store the extracted source text in Neon; Qdrant stores its embeddings separately."""
+    with get_db_connection() as conn, conn.cursor() as cur:
+        cur.execute('DELETE FROM "SourceChunk" WHERE "sourceId" = %s', (source_id,))
+        cur.executemany(
+            '''
+            INSERT INTO "SourceChunk" ("id", "chunkIndex", "content", "sourceId", "createdAt")
+            VALUES (%s, %s, %s, %s, NOW())
+            ''',
+            [(str(uuid.uuid4()), index, chunk, source_id) for index, chunk in enumerate(chunks)],
+        )
+
+
+def load_chat_history(session_id: str) -> List[dict]:
+    with get_db_connection() as conn, conn.cursor() as cur:
+        cur.execute(
+            '''
+            SELECT "role", "content" FROM "ChatMessage"
+            WHERE "sessionId" = %s
+            ORDER BY "createdAt" DESC
+            LIMIT 10
+            ''',
+            (session_id,),
+        )
+        rows = cur.fetchall()
+    return [{"role": row["role"], "content": row["content"]} for row in reversed(rows)]
+
+
+def save_chat_message(session_id: str, role: str, content: str, source_id: Optional[str] = None) -> None:
+    with get_db_connection() as conn, conn.cursor() as cur:
+        cur.execute(
+            '''
+            INSERT INTO "ChatSession" ("id", "createdAt", "updatedAt")
+            VALUES (%s, NOW(), NOW())
+            ON CONFLICT ("id") DO UPDATE SET "updatedAt" = NOW()
+            ''',
+            (session_id,),
+        )
+        cur.execute(
+            '''
+            INSERT INTO "ChatMessage" ("id", "role", "content", "createdAt", "sessionId", "sourceId")
+            VALUES (%s, %s, %s, NOW(), %s, %s)
+            ''',
+            (str(uuid.uuid4()), role, content, session_id, source_id),
+        )
+
+
+def save_chat_exchange(session_id: str, question: str, answer: str, filename: Optional[str]) -> None:
+    source_id = next(
+        (source["document_id"] for source in document_registry.values() if source["filename"] == filename),
+        None,
+    )
+    save_chat_message(session_id, "user", question, source_id)
+    save_chat_message(session_id, "assistant", answer, source_id)
+
+
+@app.on_event("startup")
+def restore_persisted_sources() -> None:
+    """Restore source metadata after an API restart."""
+    document_registry.clear()
+    document_registry.update(load_sources())
+    print(f"Loaded {len(document_registry)} source(s) from Neon.")
+
+
 def clean_text(raw_text: str) -> str:
     if not raw_text:
         return ""
@@ -270,6 +390,7 @@ async def upload_document(file: UploadFile = File(...)):
 
         title = filename
         points_to_insert = []
+        source_chunks = []
         total_chunks = 0
         full_text = ""
 
@@ -277,6 +398,7 @@ async def upload_document(file: UploadFile = File(...)):
             full_text += page["text"] + "\n"
             text_chunks = chunk_text(page["text"], chunk_size=500, chunk_overlap=100)
             for chunk_index, chunk_str in enumerate(text_chunks):
+                source_chunks.append(chunk_str)
                 vector = create_embedding(chunk_str)
                 chunk_id = str(uuid.uuid4())
                 payload = {
@@ -297,6 +419,8 @@ async def upload_document(file: UploadFile = File(...)):
             "key_points": summary_data.get("key_points", []),
             "easy_explanation": summary_data.get("easy_explanation", "")
         }
+        save_source(doc_info)
+        save_source_chunks(document_id, source_chunks)
         document_registry[document_id] = doc_info
         return {"success": True, "message": "Document ingested successfully", **doc_info}
     except HTTPException:
@@ -327,8 +451,10 @@ async def add_url_source(payload: URLRequest):
         document_id = str(uuid.uuid4())
         text_chunks = chunk_text(cleaned_text, chunk_size=500, chunk_overlap=100)
         points_to_insert = []
+        source_chunks = []
         
         for chunk_index, chunk_str in enumerate(text_chunks):
+            source_chunks.append(chunk_str)
             vector = create_embedding(chunk_str)
             chunk_id = str(uuid.uuid4())
             payload_data = {
@@ -348,6 +474,8 @@ async def add_url_source(payload: URLRequest):
             "key_points": summary_data.get("key_points", []),
             "easy_explanation": summary_data.get("easy_explanation", "")
         }
+        save_source(doc_info)
+        save_source_chunks(document_id, source_chunks)
         document_registry[document_id] = doc_info
         return {"success": True, "message": "URL ingested successfully", **doc_info}
     except Exception as e:
@@ -373,8 +501,10 @@ async def upload_image(file: UploadFile = File(...)):
         document_id = str(uuid.uuid4())
         text_chunks = chunk_text(extracted_text, chunk_size=500, chunk_overlap=100)
         points_to_insert = []
+        source_chunks = []
         
         for chunk_index, chunk_str in enumerate(text_chunks):
+            source_chunks.append(chunk_str)
             vector = create_embedding(chunk_str)
             chunk_id = str(uuid.uuid4())
             payload_data = {
@@ -394,6 +524,8 @@ async def upload_image(file: UploadFile = File(...)):
             "key_points": summary_data.get("key_points", []),
             "easy_explanation": summary_data.get("easy_explanation", "")
         }
+        save_source(doc_info)
+        save_source_chunks(document_id, source_chunks)
         document_registry[document_id] = doc_info
         return {"success": True, "message": "Image ingested successfully", **doc_info}
     except HTTPException:
@@ -409,7 +541,7 @@ async def chat_with_document(request: ChatRequest):
         
         session_id = request.session_id
         if session_id not in chat_sessions:
-            chat_sessions[session_id] = []
+            chat_sessions[session_id] = load_chat_history(session_id)
         
         history = chat_sessions[session_id]
         search_query = rewrite_query(request.question, history) if history else request.question
@@ -428,12 +560,15 @@ async def chat_with_document(request: ChatRequest):
 
         if not search_results.points:
             answer = "I could not find relevant information in your knowledge base."
+            save_chat_exchange(session_id, request.question, answer, request.filename)
             return {"question": request.question, "answer": answer, "sources_map": {}, "session_id": session_id}
 
         cross_encoder_inputs = [[request.question, pt.payload.get("text", "")] for pt in search_results.points if pt.payload.get("text")]
         
         if not cross_encoder_inputs:
-            return {"question": request.question, "answer": "No readable content found.", "sources_map": {}, "session_id": session_id}
+            answer = "No readable content found."
+            save_chat_exchange(session_id, request.question, answer, request.filename)
+            return {"question": request.question, "answer": answer, "sources_map": {}, "session_id": session_id}
 
         rerank_scores = reranker_model.predict(cross_encoder_inputs)
         scored_points = [{"point": pt, "rerank_score": float(rerank_scores[i])} for i, pt in enumerate(search_results.points)]
@@ -467,6 +602,8 @@ DOCUMENT CONTEXT:
         if len(chat_sessions[session_id]) > 10:
             chat_sessions[session_id] = chat_sessions[session_id][-10:]
 
+        save_chat_exchange(session_id, request.question, answer, request.filename)
+
         return {"question": request.question, "answer": answer, "sources_map": sources_map, "session_id": session_id, "search_query": search_query}
 
     except HTTPException:
@@ -491,11 +628,15 @@ DOCUMENT CONTEXT:
 
 @app.get("/documents")
 async def list_documents():
+    document_registry.clear()
+    document_registry.update(load_sources())
     return {"total_documents": len(document_registry), "documents": list(document_registry.values())}
 
 @app.delete("/documents/{document_id}")
 async def delete_document(document_id: str):
     if document_id in document_registry:
+        with get_db_connection() as conn, conn.cursor() as cur:
+            cur.execute('DELETE FROM "Source" WHERE "id" = %s', (document_id,))
         document_registry.pop(document_id)
         return {"message": "Deleted"}
     raise HTTPException(status_code=404)
