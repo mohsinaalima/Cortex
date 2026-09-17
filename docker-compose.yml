@@ -7,9 +7,10 @@ services:
     ports:
       - "8000:8000"
     environment:
-      # Pass the OpenAI key from your host's .env to the container
-      - OPENAI_API_KEY=${OPENAI_API_KEY}
-      - OPENAI_MODEL=gpt-4o-mini
+      # xAI's Grok API is OpenAI-compatible, but uses an xAI API key and endpoint.
+      - XAI_API_KEY=${XAI_API_KEY}
+      - XAI_MODEL=${XAI_MODEL:-grok-4.6}
+      - XAI_VISION_MODEL=${XAI_VISION_MODEL:-grok-4.6}
       # We tell our app to connect to the Qdrant container instead of a local folder
       - QDRANT_HOST=qdrant
       - QDRANT_PORT=6333

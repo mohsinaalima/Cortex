@@ -25,7 +25,6 @@ from qdrant_client.models import (
     VectorParams,
     Distance,
     Filter,
-    FilterSelector,
     FieldCondition,
     MatchValue,
 )
@@ -35,17 +34,24 @@ from qdrant_client.models import (
 # ============================================================
 load_dotenv()
 
-OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
-LLM_MODEL = os.getenv("LLM_MODEL", "gpt-4o-mini")
+XAI_API_KEY = os.getenv("XAI_API_KEY")
+# These can be overridden without editing code, for example in .env or Docker.
+LLM_MODEL = os.getenv("XAI_MODEL", "grok-beta")
+VISION_MODEL = os.getenv("XAI_VISION_MODEL", "grok-vision-beta")
 
-if not OPENAI_API_KEY:
-    raise RuntimeError("OPENAI_API_KEY is missing. Add OPENAI_API_KEY=your_key_here to your .env file.")
+if not XAI_API_KEY:
+    raise RuntimeError("XAI_API_KEY is missing. Add XAI_API_KEY=your_xai_api_key to your .env file.")
 
 # ============================================================
 # INITIALIZE CLIENTS & APP
 # ============================================================
 app = FastAPI(title="Cortex - Second Brain API", version="1.0.0")
-client = OpenAI(api_key=OPENAI_API_KEY)
+
+client = OpenAI(
+    api_key=XAI_API_KEY,
+    # xAI's API is OpenAI-compatible; `openai` is only the client library here.
+    base_url="https://api.x.ai/v1",
+)
 
 app.add_middleware(
     CORSMiddleware,
@@ -188,7 +194,6 @@ Latest Question: {current_question}
     except:
         return current_question
 
-# NEW: Summarization Helper
 def generate_source_summary(text: str) -> dict:
     if not text:
         return {"summary": "", "key_points": [], "easy_explanation": ""}
@@ -211,7 +216,6 @@ def generate_source_summary(text: str) -> dict:
         )
         data = json.loads(response.choices[0].message.content)
         
-        # NEW: Bulletproof verification. If AI hallucinates a string, force it into a list.
         if "key_points" in data and not isinstance(data["key_points"], list):
             if isinstance(data["key_points"], str):
                 data["key_points"] = [data["key_points"]]
@@ -220,14 +224,14 @@ def generate_source_summary(text: str) -> dict:
                 
         return data
     except Exception as e:
-        error_msg = "Summarization failed due to API quota limits." if "429" in str(e) else "Summarization failed."
+        error_msg = "Summarization failed due to xAI API rate limits." if "429" in str(e) else "Summarization failed."
         return {"summary": error_msg, "key_points": [], "easy_explanation": ""}
-# NEW: Image Text Extraction Helper
+
 def extract_text_from_image(base64_image: str, mime_type: str) -> str:
     prompt = "Extract all readable text, data, and useful information from this image. Return ONLY the extracted text. If it is a diagram, describe its contents clearly."
     try:
         response = client.chat.completions.create(
-            model=LLM_MODEL,
+            model=VISION_MODEL,
             messages=[
                 {
                     "role": "user",
@@ -242,7 +246,7 @@ def extract_text_from_image(base64_image: str, mime_type: str) -> str:
         return response.choices[0].message.content
     except Exception as e:
         if "429" in str(e) or "insufficient_quota" in str(e):
-             raise HTTPException(status_code=429, detail="OpenAI API quota exhausted. Cannot extract image text.")
+             raise HTTPException(status_code=429, detail="xAI API rate limit reached. Cannot extract image text.")
         raise HTTPException(status_code=500, detail=f"Image extraction failed: {str(e)}")
 
 # ============================================================
@@ -253,7 +257,6 @@ async def upload_document(file: UploadFile = File(...)):
     if not file.filename:
         raise HTTPException(status_code=400, detail="Filename is missing.")
     filename = file.filename
-    extension = os.path.splitext(filename.lower())[1]
     
     try:
         file_content = await file.read()
@@ -298,7 +301,6 @@ async def upload_document(file: UploadFile = File(...)):
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Document processing error: {str(e)}")
 
-# NEW: URL Web Scraping Endpoint
 @app.post("/sources/url")
 async def add_url_source(payload: URLRequest):
     url = payload.url
@@ -348,7 +350,6 @@ async def add_url_source(payload: URLRequest):
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"URL processing error: {str(e)}")
 
-# NEW: Image Processing Endpoint
 @app.post("/images/upload")
 async def upload_image(file: UploadFile = File(...)):
     if not file.filename:
@@ -465,12 +466,11 @@ DOCUMENT CONTEXT:
 
         return {"question": request.question, "answer": answer, "sources_map": sources_map, "session_id": session_id, "search_query": search_query}
 
-    # NEW: Securely handles OpenAI limits to keep evaluation scripts alive
     except Exception as e:
         if "429" in str(e) or "insufficient_quota" in str(e):
             return {
                 "question": request.question,
-                "answer": "OpenAI processing quota is exhausted. I cannot answer right now.",
+                "answer": "xAI API rate limit reached. Please try again in a few seconds.",
                 "sources_map": locals().get('sources_map', {}),
                 "session_id": request.session_id,
             }

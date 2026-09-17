@@ -1,10 +1,13 @@
 import requests
 import os
-from groq import Groq
+from openai import OpenAI
 from dotenv import load_dotenv
 
 load_dotenv()
-client = Groq(api_key=os.getenv("GROQ_API_KEY"))
+client = OpenAI(
+    api_key=os.getenv("XAI_API_KEY"),
+    base_url="https://api.x.ai/v1",
+)
 
 API_URL = "http://127.0.0.1:8000/chat"
 
@@ -33,7 +36,7 @@ def evaluate_generation(question: str, context: str, answer: str) -> int:
     """
     try:
         response = client.chat.completions.create(
-            model="openai/gpt-oss-20b",
+            model=os.getenv("XAI_MODEL", "grok-4.6"),
             messages=[{"role": "user", "content": prompt}],
             temperature=0.0
         )

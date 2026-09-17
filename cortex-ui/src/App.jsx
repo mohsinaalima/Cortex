@@ -86,7 +86,7 @@ export default function App() {
     } catch (error) {
       alert(
         error.response?.data?.detail ||
-          "Upload failed. (If this was an image, you may have hit Groq's 429 rate limit).",
+          "Upload failed. (If this was an image, you may have hit xAI's 429 rate limit).",
       );
     } finally {
       setIsProcessing(false);
