@@ -5,8 +5,8 @@ from dotenv import load_dotenv
 
 load_dotenv()
 client = OpenAI(
-    api_key=os.getenv("XAI_API_KEY"),
-    base_url="https://api.x.ai/v1",
+    api_key=os.getenv("GEMINI_API_KEY"),
+    base_url="https://generativelanguage.googleapis.com/v1beta/openai/",
 )
 
 API_URL = "http://127.0.0.1:8000/chat"
@@ -36,7 +36,7 @@ def evaluate_generation(question: str, context: str, answer: str) -> int:
     """
     try:
         response = client.chat.completions.create(
-            model=os.getenv("XAI_MODEL", "grok-4.6"),
+         model=os.getenv("GEMINI_MODEL", "gemini-2.5-flash"),
             messages=[{"role": "user", "content": prompt}],
             temperature=0.0
         )

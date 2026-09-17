@@ -86,7 +86,7 @@ export default function App() {
     } catch (error) {
       alert(
         error.response?.data?.detail ||
-          "Upload failed. (If this was an image, you may have hit xAI's 429 rate limit).",
+          "Upload failed. (If this was an image, you may have hit Gemini's rate limit).",
       );
     } finally {
       setIsProcessing(false);
@@ -126,9 +126,13 @@ export default function App() {
         { role: "assistant", content: res.data.answer },
       ]);
     } catch (error) {
+      const detail = error.response?.data?.detail;
       setMessages((prev) => [
         ...prev,
-        { role: "assistant", content: "Error connecting to AI backend." },
+        {
+          role: "assistant",
+          content: detail || "Error connecting to AI backend.",
+        },
       ]);
     } finally {
       setIsTyping(false);

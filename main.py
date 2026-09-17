@@ -34,13 +34,16 @@ from qdrant_client.models import (
 # ============================================================
 load_dotenv()
 
-XAI_API_KEY = os.getenv("XAI_API_KEY")
-# These can be overridden without editing code, for example in .env or Docker.
-LLM_MODEL = os.getenv("XAI_MODEL", "grok-beta")
-VISION_MODEL = os.getenv("XAI_VISION_MODEL", "grok-vision-beta")
+# Google documents both names in its tooling; prefer the Gemini-specific one.
+GEMINI_API_KEY = os.getenv("GEMINI_API_KEY") or os.getenv("GOOGLE_API_KEY")
+LLM_MODEL = os.getenv("GEMINI_MODEL", "gemini-3.6-flash")
+VISION_MODEL = os.getenv("GEMINI_VISION_MODEL", "gemini-3.6-flash")
 
-if not XAI_API_KEY:
-    raise RuntimeError("XAI_API_KEY is missing. Add XAI_API_KEY=your_xai_api_key to your .env file.")
+if not GEMINI_API_KEY:
+    raise RuntimeError(
+        "Gemini API key is missing. Add GEMINI_API_KEY=your_gemini_api_key "
+        "(or GOOGLE_API_KEY=your_gemini_api_key) to your .env file."
+    )
 
 # ============================================================
 # INITIALIZE CLIENTS & APP
@@ -48,9 +51,9 @@ if not XAI_API_KEY:
 app = FastAPI(title="Cortex - Second Brain API", version="1.0.0")
 
 client = OpenAI(
-    api_key=XAI_API_KEY,
-    # xAI's API is OpenAI-compatible; `openai` is only the client library here.
-    base_url="https://api.x.ai/v1",
+    api_key=GEMINI_API_KEY,
+    # Gemini's API is OpenAI-compatible; `openai` is only the client library here.
+    base_url="https://generativelanguage.googleapis.com/v1beta/openai/",
 )
 
 app.add_middleware(
@@ -466,6 +469,8 @@ DOCUMENT CONTEXT:
 
         return {"question": request.question, "answer": answer, "sources_map": sources_map, "session_id": session_id, "search_query": search_query}
 
+    except HTTPException:
+        raise
     except Exception as e:
         if "429" in str(e) or "insufficient_quota" in str(e):
             return {
@@ -474,6 +479,14 @@ DOCUMENT CONTEXT:
                 "sources_map": locals().get('sources_map', {}),
                 "session_id": request.session_id,
             }
+        if getattr(e, "status_code", None) in (401, 403) or "permission-denied" in str(e):
+            raise HTTPException(
+                status_code=503,
+                detail=(
+                    "Gemini access is unavailable for the configured API key. "
+                    "Configure a valid Gemini API key with active API access."
+                ),
+            )
         raise HTTPException(status_code=500, detail=f"Chat error: {str(e)}")
 
 @app.get("/documents")

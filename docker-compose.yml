@@ -1,4 +1,4 @@
-version: '3.8'
+version: "3.8"
 
 services:
   api:
@@ -7,10 +7,10 @@ services:
     ports:
       - "8000:8000"
     environment:
-      # xAI's Grok API is OpenAI-compatible, but uses an xAI API key and endpoint.
-      - XAI_API_KEY=${XAI_API_KEY}
-      - XAI_MODEL=${XAI_MODEL:-grok-4.6}
-      - XAI_VISION_MODEL=${XAI_VISION_MODEL:-grok-4.6}
+      # Google Gemini's API is OpenAI-compatible through its OpenAI endpoint.
+      - GEMINI_API_KEY=${GEMINI_API_KEY}
+      - GEMINI_MODEL=${GEMINI_MODEL:-gemini-3.6-flash}
+      - GEMINI_VISION_MODEL=${GEMINI_VISION_MODEL:-gemini-3.6-flash}
       # We tell our app to connect to the Qdrant container instead of a local folder
       - QDRANT_HOST=qdrant
       - QDRANT_PORT=6333
