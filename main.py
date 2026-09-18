@@ -82,9 +82,7 @@ print("Loading reranker model (Cross-Encoder)...")
 reranker_model = CrossEncoder("cross-encoder/ms-marco-MiniLM-L-6-v2")
 print("Reranker loaded!")
 
-# ============================================================
-# QDRANT SETUP
-# ============================================================
+
 print("Initializing Qdrant...")
 qdrant = QdrantClient(host="localhost", port=6333)
 COLLECTION_NAME = "second_brain_chunks"
