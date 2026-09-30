@@ -31,12 +31,8 @@ from qdrant_client.models import (
     MatchValue,
 )
 
-# ============================================================
-# ENVIRONMENT VARIABLES
-# ============================================================
 load_dotenv()
 
-# Google documents both names in its tooling; prefer the Gemini-specific one.
 GEMINI_API_KEY = os.getenv("GEMINI_API_KEY") or os.getenv("GOOGLE_API_KEY")
 LLM_MODEL = os.getenv("GEMINI_MODEL", "gemini-3.6-flash")
 VISION_MODEL = os.getenv("GEMINI_VISION_MODEL", "gemini-3.6-flash")
@@ -51,9 +47,7 @@ if not GEMINI_API_KEY:
 if not DATABASE_URL:
     raise RuntimeError("DATABASE_URL is missing. Add your Neon PostgreSQL connection string to .env.")
 
-# ============================================================
-# INITIALIZE CLIENTS & APP
-# ============================================================
+
 app = FastAPI(title="Cortex - Second Brain API", version="1.0.0")
 
 client = OpenAI(
@@ -70,9 +64,7 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# ============================================================
-# EMBEDDING & RERANKER MODELS
-# ============================================================
+
 print("Loading embedding model (Bi-Encoder)...")
 embedding_model = SentenceTransformer("all-MiniLM-L6-v2")
 VECTOR_SIZE = 384
@@ -99,9 +91,7 @@ else:
 
 print("Qdrant ready!")
 
-# ============================================================
-# PYDANTIC MODELS
-# ============================================================
+
 class URLRequest(BaseModel):
     url: str
 
@@ -116,15 +106,11 @@ class ChatRequest(BaseModel):
     filename: Optional[str] = None
     session_id: str = "default"
 
-# ============================================================
-# STATE (Memory & Registry)
-# ============================================================
+
 chat_sessions = {}
 document_registry = {}
 
-# ============================================================
-# HELPER FUNCTIONS
-# ============================================================
+
 def get_db_connection():
     return psycopg.connect(DATABASE_URL, row_factory=dict_row, connect_timeout=10)
 
@@ -370,9 +356,7 @@ def extract_text_from_image(base64_image: str, mime_type: str) -> str:
              raise HTTPException(status_code=429, detail="xAI API rate limit reached. Cannot extract image text.")
         raise HTTPException(status_code=500, detail=f"Image extraction failed: {str(e)}")
 
-# ============================================================
-# ENDPOINTS
-# ============================================================
+
 @app.post("/documents/upload")
 async def upload_document(file: UploadFile = File(...)):
     if not file.filename:
