@@ -76,7 +76,7 @@ print("Reranker loaded!")
 
 
 print("Initializing Qdrant...")
-qdrant = QdrantClient(host="localhost", port=6333)
+qdrant = QdrantClient(path="./qdrant_storage")
 COLLECTION_NAME = "second_brain_chunks"
 
 if not qdrant.collection_exists(COLLECTION_NAME):
