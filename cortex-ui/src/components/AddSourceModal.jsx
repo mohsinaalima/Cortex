@@ -1,0 +1,7 @@
+import { ChevronRight, Image as ImageIcon, Link, Upload, X } from "lucide-react";
+
+export default function AddSourceModal({ setShowAddMenu, processing, processStatus, uploadFile, addUrl }) {
+  return (
+      <div className="modal-backdrop" onClick={()=>setShowAddMenu(false)}><div className="add-popover" onClick={e=>e.stopPropagation()}><div className="popover-head"><div><span className="eyebrow muted">GROW YOUR SPACE</span><strong>Add something to Cortex</strong></div><button onClick={()=>setShowAddMenu(false)}><X size={17}/></button></div>{processing&&<div className="processing-note"><span className="spinner"/>{processStatus}</div>}<label className="add-option"><span className="option-icon mint"><Upload size={17}/></span><span><strong>Add a document</strong><small>PDF, Markdown, or text</small></span><ChevronRight size={15}/><input type="file" accept=".pdf,.md,.txt" onChange={e=>uploadFile(e,"documents/upload")}/></label><label className="add-option"><span className="option-icon coral"><ImageIcon size={17}/></span><span><strong>Add an image</strong><small>JPG, PNG, or WebP</small></span><ChevronRight size={15}/><input type="file" accept=".jpg,.jpeg,.png,.webp" onChange={e=>uploadFile(e,"images/upload")}/></label><button className="add-option" onClick={addUrl}><span className="option-icon blue"><Link size={17}/></span><span><strong>Add a web link</strong><small>Bring in a page to explore</small></span><ChevronRight size={15}/></button></div></div>
+  );
+}

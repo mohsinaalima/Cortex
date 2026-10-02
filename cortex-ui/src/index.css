@@ -1,3 +1,9 @@
 @tailwind base;
 @tailwind components;
 @tailwind utilities;
+
+html, body, #root { min-height: 100%; margin: 0; }
+body { min-width: 320px; }
+button:focus-visible, input:focus-visible, textarea:focus-visible { outline: 2px solid #7da682; outline-offset: 2px; }
+.crumb-brand { border: 0; padding: 0; background: transparent; font: inherit; font-weight: 700; color: #506056; cursor: pointer; }
+.crumb-brand:hover { color: #2d4939; }
