@@ -6,6 +6,8 @@ import ChatPage from "./components/ChatPage.jsx";
 import AddSourceModal from "./components/AddSourceModal.jsx";
 import AuthPage from "./components/AuthPage.jsx";
 import LandingPage from "./components/LandingPage.jsx";
+import ProfilePage from "./components/ProfilePage.jsx";
+import "./components/Rail.css";
 import { Box, BrainCircuit, ChevronRight, CircleHelp, Command, FileText, FolderOpen, Image as ImageIcon, Link, LogOut, MessageCircle, MessageSquare, MoreHorizontal, Plus, Search } from "lucide-react";
 
 const API_BASE = "http://127.0.0.1:8000";
@@ -147,12 +149,13 @@ export default function App() {
       <button className={`rail-button ${view === "library" ? "selected" : ""}`} title="Library" onClick={() => setView("library")}><FolderOpen size={19}/></button>
       <div className="rail-spacer"/>
       <button className="rail-button" title="Help"><CircleHelp size={18}/></button>
-      <button type="button" className="avatar" onClick={handleLogout} title={`Sign out ${user.name}`} aria-label="Sign out"><span>{user.name?.trim()?.[0]?.toUpperCase() || "U"}</span><LogOut className="avatar-logout" size={13}/></button>
+      <button type="button" className={`avatar ${view === "profile" ? "selected" : ""}`} onClick={() => setView("profile")} title="Your profile" aria-label="Open your profile" aria-current={view === "profile" ? "page" : undefined}><span>{user.name?.trim()?.[0]?.toUpperCase() || "U"}</span></button>
+      <button type="button" className="rail-button rail-signout" onClick={handleLogout} title="Sign out" aria-label="Sign out"><LogOut size={17}/></button>
     </aside>
 
     <main className="main-area">
       <header className="topbar">
-        <div className="breadcrumb"><button type="button" className="crumb-brand" onClick={goHome} title="Go to home">Cortex</button><ChevronRight size={14}/><span>{view === "home" ? "Home" : view === "library" ? "Your library" : "Chat"}</span>{view === "chat" && activeSource && <><ChevronRight size={14}/><span className="crumb-current">{activeSource.title || activeSource.filename}</span></>}</div>
+        <div className="breadcrumb"><button type="button" className="crumb-brand" onClick={goHome} title="Go to home">Cortex</button><ChevronRight size={14}/><span>{view === "home" ? "Home" : view === "library" ? "Your library" : view === "profile" ? "Your profile" : "Chat"}</span>{view === "chat" && activeSource && <><ChevronRight size={14}/><span className="crumb-current">{activeSource.title || activeSource.filename}</span></>}</div>
         <div className="top-actions"><button className="quiet-button" onClick={() => setView("library")}><Search size={16}/><span>Search your space</span><kbd><Command size={10}/> K</kbd></button><button className="top-icon" title="More"><MoreHorizontal size={20}/></button></div>
       </header>
 
@@ -161,6 +164,8 @@ export default function App() {
       {view === "library" && <LibraryPage {...{documents, category, setCategory, categoryCards, query, setQuery, chatTurns, openThread, visibleDocs, openSource, setShowAddMenu, setView, getIcon}} />}
 
       {view === "chat" && <ChatPage {...{activeSource, setActiveSource, getIcon, sourceMessages, inputMessage, setInputMessage, sendMessage, isTyping, messagesEndRef, setView, chatTurns, chatKey, openThread, documents, openSource, getKind}} />}
+
+      {view === "profile" && <ProfilePage user={user} sourceCount={documents.length} threadCount={chatTurns.length} onBack={goHome} onLogout={handleLogout} />}
     </main>
 
     {showAddMenu && <AddSourceModal {...{setShowAddMenu, processing, processStatus, uploadFile, addUrl}} />}
