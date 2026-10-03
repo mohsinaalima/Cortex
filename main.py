@@ -8,7 +8,8 @@ import requests
 from bs4 import BeautifulSoup
 from typing import List, Optional
 
-from fastapi import FastAPI, UploadFile, File, HTTPException
+from fastapi import FastAPI, UploadFile, File, HTTPException, Depends
+from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 from pypdf import PdfReader
@@ -29,7 +30,9 @@ from qdrant_client.models import (
     Filter,
     FieldCondition,
     MatchValue,
+    FilterSelector,
 )
+from auth_utils import create_access_token, decode_access_token, hash_password, verify_password
 
 load_dotenv()
 
@@ -74,7 +77,6 @@ print("Loading reranker model (Cross-Encoder)...")
 reranker_model = CrossEncoder("cross-encoder/ms-marco-MiniLM-L-6-v2")
 print("Reranker loaded!")
 
-
 print("Initializing Qdrant...")
 qdrant = QdrantClient(path="./qdrant_storage")
 COLLECTION_NAME = "second_brain_chunks"
@@ -106,6 +108,15 @@ class ChatRequest(BaseModel):
     filename: Optional[str] = None
     session_id: str = "default"
 
+class RegisterRequest(BaseModel):
+    name: str
+    email: str
+    password: str
+
+class LoginRequest(BaseModel):
+    email: str
+    password: str
+
 
 chat_sessions = {}
 document_registry = {}
@@ -115,6 +126,90 @@ def get_db_connection():
     return psycopg.connect(DATABASE_URL, row_factory=dict_row, connect_timeout=10)
 
 
+bearer_scheme = HTTPBearer(auto_error=False)
+
+
+def require_auth_secret() -> None:
+    if len(os.getenv("AUTH_SECRET_KEY", "").encode("utf-8")) < 32:
+        raise HTTPException(
+            status_code=503,
+            detail="Authentication is not configured. Set AUTH_SECRET_KEY in the backend .env file.",
+        )
+
+
+def public_user(row: dict) -> dict:
+    return {"id": row["id"], "name": row["name"], "email": row["email"]}
+
+
+def create_auth_response(row: dict) -> dict:
+    require_auth_secret()
+    return {
+        "access_token": create_access_token(row["id"], row["email"]),
+        "token_type": "bearer",
+        "user": public_user(row),
+    }
+
+
+def get_current_user(credentials: Optional[HTTPAuthorizationCredentials] = Depends(bearer_scheme)) -> dict:
+    if credentials is None or credentials.scheme.lower() != "bearer":
+        raise HTTPException(status_code=401, detail="Please sign in to continue.", headers={"WWW-Authenticate": "Bearer"})
+    claims = decode_access_token(credentials.credentials)
+    if not claims:
+        raise HTTPException(status_code=401, detail="Your session expired. Please sign in again.", headers={"WWW-Authenticate": "Bearer"})
+    with get_db_connection() as conn, conn.cursor() as cur:
+        cur.execute('SELECT "id", "name", "email" FROM "User" WHERE "id" = %s', (claims["sub"],))
+        row = cur.fetchone()
+    if not row:
+        raise HTTPException(status_code=401, detail="This account is no longer available.", headers={"WWW-Authenticate": "Bearer"})
+    return row
+
+
+@app.post("/auth/register", status_code=201)
+def register_user(payload: RegisterRequest):
+    require_auth_secret()
+    name = payload.name.strip()
+    email = payload.email.strip().lower()
+    password = payload.password
+    if not name or len(name) > 80:
+        raise HTTPException(status_code=422, detail="Name must be between 1 and 80 characters.")
+    if len(email) > 254 or not re.fullmatch(r"[^\s@]+@[^\s@]+\.[^\s@]+", email):
+        raise HTTPException(status_code=422, detail="Enter a valid email address.")
+    if len(password) < 8 or len(password) > 128:
+        raise HTTPException(status_code=422, detail="Password must be between 8 and 128 characters.")
+    user_id = str(uuid.uuid4())
+    try:
+        with get_db_connection() as conn, conn.cursor() as cur:
+            cur.execute(
+                '''INSERT INTO "User" ("id", "name", "email", "passwordHash", "createdAt", "updatedAt")
+                   VALUES (%s, %s, %s, %s, NOW(), NOW())
+                   RETURNING "id", "name", "email"''',
+                (user_id, name, email, hash_password(password)),
+            )
+            row = cur.fetchone()
+    except psycopg.errors.UniqueViolation:
+        raise HTTPException(status_code=409, detail="An account with this email already exists.")
+    return create_auth_response(row)
+
+
+@app.post("/auth/login")
+def login_user(payload: LoginRequest):
+    require_auth_secret()
+    email = payload.email.strip().lower()
+    if len(email) > 254 or len(payload.password) > 128:
+        raise HTTPException(status_code=401, detail="Email or password is incorrect.")
+    with get_db_connection() as conn, conn.cursor() as cur:
+        cur.execute('SELECT "id", "name", "email", "passwordHash" FROM "User" WHERE "email" = %s', (email,))
+        row = cur.fetchone()
+    if not row or not verify_password(payload.password, row["passwordHash"]):
+        raise HTTPException(status_code=401, detail="Email or password is incorrect.")
+    return create_auth_response(row)
+
+
+@app.get("/auth/me")
+def get_my_account(user: dict = Depends(get_current_user)):
+    return public_user(user)
+
+
 def save_source(source: dict) -> None:
     """Persist source metadata while Qdrant retains the embedding vectors."""
     with get_db_connection() as conn, conn.cursor() as cur:
@@ -122,8 +217,8 @@ def save_source(source: dict) -> None:
             '''
             INSERT INTO "Source" (
                 "id", "filename", "title", "sourceType", "chunksInserted",
-                "summary", "keyPoints", "easyExplanation", "createdAt", "updatedAt"
-            ) VALUES (%s, %s, %s, %s, %s, %s, %s::jsonb, %s, NOW(), NOW())
+                "summary", "keyPoints", "easyExplanation", "userId", "createdAt", "updatedAt"
+            ) VALUES (%s, %s, %s, %s, %s, %s, %s::jsonb, %s, %s, NOW(), NOW())
             ON CONFLICT ("id") DO UPDATE SET
                 "filename" = EXCLUDED."filename",
                 "title" = EXCLUDED."title",
@@ -132,19 +227,23 @@ def save_source(source: dict) -> None:
                 "summary" = EXCLUDED."summary",
                 "keyPoints" = EXCLUDED."keyPoints",
                 "easyExplanation" = EXCLUDED."easyExplanation",
+                "userId" = EXCLUDED."userId",
                 "updatedAt" = NOW()
             ''',
             (
                 source["document_id"], source["filename"], source["title"],
                 source["source_type"], source["chunks_inserted"], source.get("summary"),
-                json.dumps(source.get("key_points", [])), source.get("easy_explanation"),
+                json.dumps(source.get("key_points", [])), source.get("easy_explanation"), source.get("user_id"),
             ),
         )
 
 
-def load_sources() -> dict:
+def load_sources(user_id: Optional[str] = None) -> dict:
     with get_db_connection() as conn, conn.cursor() as cur:
-        cur.execute('SELECT * FROM "Source" ORDER BY "createdAt" DESC')
+        if user_id:
+            cur.execute('SELECT * FROM "Source" WHERE "userId" = %s ORDER BY "createdAt" DESC', (user_id,))
+        else:
+            cur.execute('SELECT * FROM "Source" ORDER BY "createdAt" DESC')
         rows = cur.fetchall()
     return {
         row["id"]: {
@@ -156,6 +255,7 @@ def load_sources() -> dict:
             "summary": row["summary"] or "",
             "key_points": row["keyPoints"] or [],
             "easy_explanation": row["easyExplanation"] or "",
+            "user_id": row["userId"],
         }
         for row in rows
     }
@@ -174,30 +274,31 @@ def save_source_chunks(source_id: str, chunks: List[str]) -> None:
         )
 
 
-def load_chat_history(session_id: str) -> List[dict]:
+def load_chat_history(session_id: str, user_id: str) -> List[dict]:
     with get_db_connection() as conn, conn.cursor() as cur:
         cur.execute(
             '''
-            SELECT "role", "content" FROM "ChatMessage"
-            WHERE "sessionId" = %s
-            ORDER BY "createdAt" DESC
+            SELECT m."role", m."content" FROM "ChatMessage" m
+            JOIN "ChatSession" s ON s."id" = m."sessionId"
+            WHERE m."sessionId" = %s AND s."userId" = %s
+            ORDER BY m."createdAt" DESC
             LIMIT 10
             ''',
-            (session_id,),
+            (session_id, user_id),
         )
         rows = cur.fetchall()
     return [{"role": row["role"], "content": row["content"]} for row in reversed(rows)]
 
 
-def save_chat_message(session_id: str, role: str, content: str, source_id: Optional[str] = None) -> None:
+def save_chat_message(session_id: str, user_id: str, role: str, content: str, source_id: Optional[str] = None) -> None:
     with get_db_connection() as conn, conn.cursor() as cur:
         cur.execute(
             '''
-            INSERT INTO "ChatSession" ("id", "createdAt", "updatedAt")
-            VALUES (%s, NOW(), NOW())
+            INSERT INTO "ChatSession" ("id", "userId", "createdAt", "updatedAt")
+            VALUES (%s, %s, NOW(), NOW())
             ON CONFLICT ("id") DO UPDATE SET "updatedAt" = NOW()
             ''',
-            (session_id,),
+            (session_id, user_id),
         )
         cur.execute(
             '''
@@ -208,13 +309,15 @@ def save_chat_message(session_id: str, role: str, content: str, source_id: Optio
         )
 
 
-def save_chat_exchange(session_id: str, question: str, answer: str, filename: Optional[str]) -> None:
-    source_id = next(
-        (source["document_id"] for source in document_registry.values() if source["filename"] == filename),
-        None,
-    )
-    save_chat_message(session_id, "user", question, source_id)
-    save_chat_message(session_id, "assistant", answer, source_id)
+def save_chat_exchange(session_id: str, user_id: str, question: str, answer: str, filename: Optional[str]) -> None:
+    source_id = None
+    if filename:
+        with get_db_connection() as conn, conn.cursor() as cur:
+            cur.execute('SELECT "id" FROM "Source" WHERE "filename" = %s AND "userId" = %s LIMIT 1', (filename, user_id))
+            source = cur.fetchone()
+            source_id = source["id"] if source else None
+    save_chat_message(session_id, user_id, "user", question, source_id)
+    save_chat_message(session_id, user_id, "assistant", answer, source_id)
 
 
 @app.on_event("startup")
@@ -358,7 +461,7 @@ def extract_text_from_image(base64_image: str, mime_type: str) -> str:
 
 
 @app.post("/documents/upload")
-async def upload_document(file: UploadFile = File(...)):
+async def upload_document(file: UploadFile = File(...), user: dict = Depends(get_current_user)):
     if not file.filename:
         raise HTTPException(status_code=400, detail="Filename is missing.")
     filename = file.filename
@@ -385,7 +488,7 @@ async def upload_document(file: UploadFile = File(...)):
                 chunk_id = str(uuid.uuid4())
                 payload = {
                     "document_id": document_id, "filename": filename, "title": title,
-                    "source_type": "document", "text": chunk_str,
+                    "source_type": "document", "text": chunk_str, "user_id": user["id"],
                 }
                 points_to_insert.append(PointStruct(id=chunk_id, vector=vector, payload=payload))
                 total_chunks += 1
@@ -399,19 +502,20 @@ async def upload_document(file: UploadFile = File(...)):
             "source_type": "document", "chunks_inserted": total_chunks,
             "summary": summary_data.get("summary", ""),
             "key_points": summary_data.get("key_points", []),
-            "easy_explanation": summary_data.get("easy_explanation", "")
+            "easy_explanation": summary_data.get("easy_explanation", ""),
+            "user_id": user["id"],
         }
         save_source(doc_info)
         save_source_chunks(document_id, source_chunks)
         document_registry[document_id] = doc_info
-        return {"success": True, "message": "Document ingested successfully", **doc_info}
+        return {"success": True, "message": "Document ingested successfully", **{k: v for k, v in doc_info.items() if k != "user_id"}}
     except HTTPException:
         raise
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Document processing error: {str(e)}")
 
 @app.post("/sources/url")
-async def add_url_source(payload: URLRequest):
+async def add_url_source(payload: URLRequest, user: dict = Depends(get_current_user)):
     url = payload.url
     if not url.startswith("http"):
         raise HTTPException(status_code=400, detail="Invalid URL format.")
@@ -442,6 +546,7 @@ async def add_url_source(payload: URLRequest):
             payload_data = {
                 "document_id": document_id, "filename": url, "title": title,
                 "source_type": "url", "text": chunk_str,
+                "user_id": user["id"],
             }
             points_to_insert.append(PointStruct(id=chunk_id, vector=vector, payload=payload_data))
             
@@ -454,17 +559,18 @@ async def add_url_source(payload: URLRequest):
             "source_type": "url", "chunks_inserted": len(points_to_insert),
             "summary": summary_data.get("summary", ""),
             "key_points": summary_data.get("key_points", []),
-            "easy_explanation": summary_data.get("easy_explanation", "")
+            "easy_explanation": summary_data.get("easy_explanation", ""),
+            "user_id": user["id"],
         }
         save_source(doc_info)
         save_source_chunks(document_id, source_chunks)
         document_registry[document_id] = doc_info
-        return {"success": True, "message": "URL ingested successfully", **doc_info}
+        return {"success": True, "message": "URL ingested successfully", **{k: v for k, v in doc_info.items() if k != "user_id"}}
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"URL processing error: {str(e)}")
 
 @app.post("/images/upload")
-async def upload_image(file: UploadFile = File(...)):
+async def upload_image(file: UploadFile = File(...), user: dict = Depends(get_current_user)):
     if not file.filename:
         raise HTTPException(status_code=400, detail="Filename is missing.")
     extension = os.path.splitext(file.filename.lower())[1]
@@ -492,6 +598,7 @@ async def upload_image(file: UploadFile = File(...)):
             payload_data = {
                 "document_id": document_id, "filename": file.filename, "title": file.filename,
                 "source_type": "image", "text": chunk_str,
+                "user_id": user["id"],
             }
             points_to_insert.append(PointStruct(id=chunk_id, vector=vector, payload=payload_data))
             
@@ -504,32 +611,36 @@ async def upload_image(file: UploadFile = File(...)):
             "source_type": "image", "chunks_inserted": len(points_to_insert),
             "summary": summary_data.get("summary", ""),
             "key_points": summary_data.get("key_points", []),
-            "easy_explanation": summary_data.get("easy_explanation", "")
+            "easy_explanation": summary_data.get("easy_explanation", ""),
+            "user_id": user["id"],
         }
         save_source(doc_info)
         save_source_chunks(document_id, source_chunks)
         document_registry[document_id] = doc_info
-        return {"success": True, "message": "Image ingested successfully", **doc_info}
+        return {"success": True, "message": "Image ingested successfully", **{k: v for k, v in doc_info.items() if k != "user_id"}}
     except HTTPException:
         raise
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Image processing error: {str(e)}")
 
 @app.post("/chat")
-async def chat_with_document(request: ChatRequest):
+async def chat_with_document(request: ChatRequest, user: dict = Depends(get_current_user)):
     try:
         if not request.question.strip():
             raise HTTPException(status_code=400, detail="Question cannot be empty.")
         
-        session_id = request.session_id
+        session_id = f"{user['id']}:{request.session_id[:100]}"
         if session_id not in chat_sessions:
-            chat_sessions[session_id] = load_chat_history(session_id)
+            chat_sessions[session_id] = load_chat_history(session_id, user["id"])
         
         history = chat_sessions[session_id]
         search_query = rewrite_query(request.question, history) if history else request.question
 
         query_vector = create_embedding(search_query)
-        query_filter = Filter(must=[FieldCondition(key="filename", match=MatchValue(value=request.filename))]) if request.filename else None
+        conditions = [FieldCondition(key="user_id", match=MatchValue(value=user["id"]))]
+        if request.filename:
+            conditions.append(FieldCondition(key="filename", match=MatchValue(value=request.filename)))
+        query_filter = Filter(must=conditions)
 
         search_results = qdrant.query_points(
             collection_name=COLLECTION_NAME,
@@ -542,14 +653,14 @@ async def chat_with_document(request: ChatRequest):
 
         if not search_results.points:
             answer = "I could not find relevant information in your knowledge base."
-            save_chat_exchange(session_id, request.question, answer, request.filename)
+            save_chat_exchange(session_id, user["id"], request.question, answer, request.filename)
             return {"question": request.question, "answer": answer, "sources_map": {}, "session_id": session_id}
 
         cross_encoder_inputs = [[request.question, pt.payload.get("text", "")] for pt in search_results.points if pt.payload.get("text")]
         
         if not cross_encoder_inputs:
             answer = "No readable content found."
-            save_chat_exchange(session_id, request.question, answer, request.filename)
+            save_chat_exchange(session_id, user["id"], request.question, answer, request.filename)
             return {"question": request.question, "answer": answer, "sources_map": {}, "session_id": session_id}
 
         rerank_scores = reranker_model.predict(cross_encoder_inputs)
@@ -584,7 +695,7 @@ DOCUMENT CONTEXT:
         if len(chat_sessions[session_id]) > 10:
             chat_sessions[session_id] = chat_sessions[session_id][-10:]
 
-        save_chat_exchange(session_id, request.question, answer, request.filename)
+        save_chat_exchange(session_id, user["id"], request.question, answer, request.filename)
 
         return {"question": request.question, "answer": answer, "sources_map": sources_map, "session_id": session_id, "search_query": search_query}
 
@@ -609,16 +720,22 @@ DOCUMENT CONTEXT:
         raise HTTPException(status_code=500, detail=f"Chat error: {str(e)}")
 
 @app.get("/documents")
-async def list_documents():
-    document_registry.clear()
-    document_registry.update(load_sources())
-    return {"total_documents": len(document_registry), "documents": list(document_registry.values())}
+async def list_documents(user: dict = Depends(get_current_user)):
+    documents = load_sources(user["id"])
+    public_documents = [{k: v for k, v in doc.items() if k != "user_id"} for doc in documents.values()]
+    return {"total_documents": len(public_documents), "documents": public_documents}
 
 @app.delete("/documents/{document_id}")
-async def delete_document(document_id: str):
-    if document_id in document_registry:
-        with get_db_connection() as conn, conn.cursor() as cur:
-            cur.execute('DELETE FROM "Source" WHERE "id" = %s', (document_id,))
-        document_registry.pop(document_id)
-        return {"message": "Deleted"}
-    raise HTTPException(status_code=404)
+async def delete_document(document_id: str, user: dict = Depends(get_current_user)):
+    conditions = Filter(must=[
+        FieldCondition(key="user_id", match=MatchValue(value=user["id"])),
+        FieldCondition(key="document_id", match=MatchValue(value=document_id)),
+    ])
+    with get_db_connection() as conn, conn.cursor() as cur:
+        cur.execute('DELETE FROM "Source" WHERE "id" = %s AND "userId" = %s RETURNING "id"', (document_id, user["id"]))
+        deleted = cur.fetchone()
+    if not deleted:
+        raise HTTPException(status_code=404, detail="Source not found.")
+    qdrant.delete(collection_name=COLLECTION_NAME, points_selector=FilterSelector(filter=conditions))
+    document_registry.pop(document_id, None)
+    return {"message": "Deleted"}

@@ -4,7 +4,9 @@ import HomePage from "./components/HomePage.jsx";
 import LibraryPage from "./components/LibraryPage.jsx";
 import ChatPage from "./components/ChatPage.jsx";
 import AddSourceModal from "./components/AddSourceModal.jsx";
-import { Box, BrainCircuit, ChevronRight, CircleHelp, Command, FileText, FolderOpen, Image as ImageIcon, Link, MessageCircle, MessageSquare, MoreHorizontal, Plus, Search } from "lucide-react";
+import AuthPage from "./components/AuthPage.jsx";
+import LandingPage from "./components/LandingPage.jsx";
+import { Box, BrainCircuit, ChevronRight, CircleHelp, Command, FileText, FolderOpen, Image as ImageIcon, Link, LogOut, MessageCircle, MessageSquare, MoreHorizontal, Plus, Search } from "lucide-react";
 
 const API_BASE = "http://127.0.0.1:8000";
 const readStore = (key, fallback) => {
@@ -13,6 +15,9 @@ const readStore = (key, fallback) => {
 
 export default function App() {
   const [documents, setDocuments] = useState([]);
+  const [user, setUser] = useState(null);
+  const [authLoading, setAuthLoading] = useState(() => Boolean(localStorage.getItem("cortex_access_token")));
+  const [authMode, setAuthMode] = useState(null);
   const [processing, setProcessing] = useState(false);
   const [processStatus, setProcessStatus] = useState("");
   const [activeSource, setActiveSource] = useState(null);
@@ -20,15 +25,45 @@ export default function App() {
   const [view, setView] = useState("home");
   const [category, setCategory] = useState("all");
   const [query, setQuery] = useState("");
-  const [messages, setMessages] = useState(() => readStore("cortex_chat_history", []).map(m => ({ ...m, sourceId: m.sourceId || "global" })));
+  const [messages, setMessages] = useState([]);
   const [inputMessage, setInputMessage] = useState("");
   const [isTyping, setIsTyping] = useState(false);
   const messagesEndRef = useRef(null);
   const chatKey = activeSource?.document_id || "global";
 
-  useEffect(() => { localStorage.setItem("cortex_chat_history", JSON.stringify(messages)); }, [messages]);
+  useEffect(() => {
+    const token = localStorage.getItem("cortex_access_token");
+    if (!token) return;
+    axios.defaults.headers.common.Authorization = `Bearer ${token}`;
+    axios.get(`${API_BASE}/auth/me`).then(({ data }) => {
+      setUser(data);
+      setMessages(readStore(`cortex_chat_history_${data.id}`, []).map(m => ({ ...m, sourceId: m.sourceId || "global" })));
+    }).catch(() => {
+      localStorage.removeItem("cortex_access_token");
+      delete axios.defaults.headers.common.Authorization;
+    }).finally(() => setAuthLoading(false));
+  }, []);
+  useEffect(() => {
+    if (user) localStorage.setItem(`cortex_chat_history_${user.id}`, JSON.stringify(messages));
+  }, [messages, user]);
   useEffect(() => { messagesEndRef.current?.scrollIntoView({ behavior: "smooth" }); }, [messages, isTyping]);
-  useEffect(() => { fetchDocuments(); }, []);
+  useEffect(() => { if (user) fetchDocuments(); }, [user]);
+
+  function handleAuthenticated(response) {
+    localStorage.setItem("cortex_access_token", response.access_token);
+    axios.defaults.headers.common.Authorization = `Bearer ${response.access_token}`;
+    setUser(response.user);
+    setMessages(readStore(`cortex_chat_history_${response.user.id}`, []).map(m => ({ ...m, sourceId: m.sourceId || "global" })));
+  }
+  function handleLogout() {
+    localStorage.removeItem("cortex_access_token");
+    delete axios.defaults.headers.common.Authorization;
+    setUser(null);
+    setDocuments([]);
+    setMessages([]);
+    setActiveSource(null);
+    setView("home");
+  }
 
   async function fetchDocuments() {
     try { const res = await axios.get(`${API_BASE}/documents`); setDocuments(res.data.documents || []); }
@@ -98,6 +133,11 @@ export default function App() {
     { id: "chats", label: "Threads", note: "Ideas in conversation", icon: MessageCircle, color: "lilac", count: chatTurns.length },
   ];
 
+  if (authLoading) return <div className="auth-loading"><span className="auth-loading-mark"><BrainCircuit size={22}/></span><span>Opening your Cortex…</span></div>;
+  if (!user) return authMode
+    ? <AuthPage initialMode={authMode} onAuthenticated={handleAuthenticated} onBack={() => setAuthMode(null)} />
+    : <LandingPage onSignUp={() => setAuthMode("register")} onLogin={() => setAuthMode("login")} />;
+
   return <div className="app-shell">
     <aside className="rail">
       <button type="button" className="brand-mark" onClick={goHome} aria-label="Cortex home" title="Go to home"><BrainCircuit size={22}/></button>
@@ -107,7 +147,7 @@ export default function App() {
       <button className={`rail-button ${view === "library" ? "selected" : ""}`} title="Library" onClick={() => setView("library")}><FolderOpen size={19}/></button>
       <div className="rail-spacer"/>
       <button className="rail-button" title="Help"><CircleHelp size={18}/></button>
-      <div className="avatar">M</div>
+      <button type="button" className="avatar" onClick={handleLogout} title={`Sign out ${user.name}`} aria-label="Sign out"><span>{user.name?.trim()?.[0]?.toUpperCase() || "U"}</span><LogOut className="avatar-logout" size={13}/></button>
     </aside>
 
     <main className="main-area">

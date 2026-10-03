@@ -7,6 +7,19 @@ datasource db {
   provider = "postgresql"
 }
 
+model User {
+  id           String        @id @default(uuid())
+  name         String
+  email        String        @unique
+  passwordHash String
+  createdAt    DateTime      @default(now())
+  updatedAt    DateTime      @updatedAt
+  sources      Source[]
+  chatSessions ChatSession[]
+
+  @@index([createdAt])
+}
+
 model Source {
   id              String   @id @default(uuid())
   filename        String
@@ -16,10 +29,14 @@ model Source {
   summary         String?
   keyPoints       Json?
   easyExplanation String?
+  userId          String?
   createdAt       DateTime @default(now())
   updatedAt       DateTime @updatedAt
   messages        ChatMessage[]
   chunks          SourceChunk[]
+  user            User?    @relation(fields: [userId], references: [id], onDelete: SetNull)
+
+  @@index([userId, createdAt])
 }
 
 model SourceChunk {
@@ -36,9 +53,13 @@ model SourceChunk {
 
 model ChatSession {
   id        String        @id @default(uuid())
+  userId    String?
   createdAt DateTime      @default(now())
   updatedAt DateTime      @updatedAt
   messages  ChatMessage[]
+  user      User?         @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId, updatedAt])
 }
 
 model ChatMessage {
