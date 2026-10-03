@@ -12,6 +12,7 @@ model User {
   name         String
   email        String        @unique
   passwordHash String?
+  avatarData   String?
   createdAt    DateTime      @default(now())
   updatedAt    DateTime      @updatedAt
   sources      Source[]

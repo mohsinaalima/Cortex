@@ -148,7 +148,7 @@ def require_auth_secret() -> None:
 
 
 def public_user(row: dict) -> dict:
-    return {"id": row["id"], "name": row["name"], "email": row["email"]}
+    return {"id": row["id"], "name": row["name"], "email": row["email"], "avatar_data": row.get("avatarData")}
 
 
 def create_auth_response(row: dict) -> dict:
@@ -167,7 +167,7 @@ def get_current_user(credentials: Optional[HTTPAuthorizationCredentials] = Depen
     if not claims:
         raise HTTPException(status_code=401, detail="Your session expired. Please sign in again.", headers={"WWW-Authenticate": "Bearer"})
     with get_db_connection() as conn, conn.cursor() as cur:
-        cur.execute('SELECT "id", "name", "email" FROM "User" WHERE "id" = %s', (claims["sub"],))
+        cur.execute('SELECT "id", "name", "email", "avatarData" FROM "User" WHERE "id" = %s', (claims["sub"],))
         row = cur.fetchone()
     if not row:
         raise HTTPException(status_code=401, detail="This account is no longer available.", headers={"WWW-Authenticate": "Bearer"})
@@ -218,6 +218,24 @@ def login_user(payload: LoginRequest):
 @app.get("/auth/me")
 def get_my_account(user: dict = Depends(get_current_user)):
     return public_user(user)
+
+
+@app.put("/auth/avatar")
+async def update_avatar(file: UploadFile = File(...), user: dict = Depends(get_current_user)):
+    allowed = {"image/jpeg": ("jpeg", b"\xff\xd8\xff"), "image/png": ("png", b"\x89PNG\r\n\x1a\n"), "image/webp": ("webp", b"RIFF")}
+    if file.content_type not in allowed:
+        raise HTTPException(status_code=400, detail="Choose a JPG, PNG, or WebP image.")
+    content = await file.read(2_000_001)
+    if len(content) > 2_000_000:
+        raise HTTPException(status_code=400, detail="Your profile image must be smaller than 2 MB.")
+    _, signature = allowed[file.content_type]
+    if not content.startswith(signature) or (file.content_type == "image/webp" and content[8:12] != b"WEBP"):
+        raise HTTPException(status_code=400, detail="The selected file is not a valid image.")
+    avatar_data = f"data:{file.content_type};base64,{base64.b64encode(content).decode('ascii')}"
+    with get_db_connection() as conn, conn.cursor() as cur:
+        cur.execute('UPDATE "User" SET "avatarData" = %s, "updatedAt" = NOW() WHERE "id" = %s RETURNING "id", "name", "email", "avatarData"', (avatar_data, user["id"]))
+        row = cur.fetchone()
+    return {"user": public_user(row)}
 
 
 def oauth_urls(provider: str):

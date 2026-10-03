@@ -7,6 +7,8 @@ import AddSourceModal from "./components/AddSourceModal.jsx";
 import AuthPage from "./components/AuthPage.jsx";
 import LandingPage from "./components/LandingPage.jsx";
 import ProfilePage from "./components/ProfilePage.jsx";
+import OnboardingTour from "./components/OnboardingTour.jsx";
+import "./components/UserAvatar.css";
 import "./components/Rail.css";
 import { Box, BrainCircuit, ChevronRight, CircleHelp, Command, FileText, FolderOpen, Image as ImageIcon, Link, LogOut, MessageCircle, MessageSquare, MoreHorizontal, Plus, Search } from "lucide-react";
 
@@ -34,6 +36,7 @@ export default function App() {
   const [activeSource, setActiveSource] = useState(null);
   const [showAddMenu, setShowAddMenu] = useState(false);
   const [view, setView] = useState("home");
+  const [showOnboarding, setShowOnboarding] = useState(false);
   const [category, setCategory] = useState("all");
   const [query, setQuery] = useState("");
   const [messages, setMessages] = useState([]);
@@ -64,6 +67,7 @@ export default function App() {
     axios.defaults.headers.common.Authorization = `Bearer ${token}`;
     axios.get(`${API_BASE}/auth/me`).then(({ data }) => {
       setUser(data);
+      setShowOnboarding(localStorage.getItem(`cortex_tour_completed_${data.id}`) !== "true");
       setMessages(readStore(`cortex_chat_history_${data.id}`, []).map(m => ({ ...m, sourceId: m.sourceId || "global" })));
     }).catch(() => {
       localStorage.removeItem("cortex_access_token");
@@ -80,6 +84,7 @@ export default function App() {
     localStorage.setItem("cortex_access_token", response.access_token);
     axios.defaults.headers.common.Authorization = `Bearer ${response.access_token}`;
     setUser(response.user);
+    setShowOnboarding(localStorage.getItem(`cortex_tour_completed_${response.user.id}`) !== "true");
     setMessages(readStore(`cortex_chat_history_${response.user.id}`, []).map(m => ({ ...m, sourceId: m.sourceId || "global" })));
   }
   function handleLogout() {
@@ -90,6 +95,14 @@ export default function App() {
     setMessages([]);
     setActiveSource(null);
     setView("home");
+    setShowOnboarding(false);
+  }
+
+  async function handleAvatarChange(file) {
+    const form = new FormData();
+    form.append("file", file);
+    const { data } = await axios.put(`${API_BASE}/auth/avatar`, form, { headers: { "Content-Type": "multipart/form-data" } });
+    setUser(data.user);
   }
 
   async function fetchDocuments() {
@@ -169,12 +182,12 @@ export default function App() {
     <aside className="rail">
       <button type="button" className="brand-mark" onClick={goHome} aria-label="Cortex home" title="Go to home"><BrainCircuit size={22}/></button>
       <div className="rail-rule" />
-      <button type="button" className={`rail-button ${view === "home" ? "selected" : ""}`} title="Home" aria-label="Home" aria-current={view === "home" ? "page" : undefined} onClick={goHome}><Box size={19}/></button>
-      <button className={`rail-button ${view === "chat" ? "selected" : ""}`} title="Chat" onClick={() => setView("chat")}><MessageSquare size={19}/></button>
-      <button className={`rail-button ${view === "library" ? "selected" : ""}`} title="Library" onClick={() => setView("library")}><FolderOpen size={19}/></button>
+      <button type="button" data-tour="home" className={`rail-button ${view === "home" ? "selected" : ""}`} title="Home" aria-label="Home" aria-current={view === "home" ? "page" : undefined} onClick={goHome}><Box size={19}/></button>
+      <button type="button" data-tour="chat" className={`rail-button ${view === "chat" ? "selected" : ""}`} title="Chat" onClick={() => setView("chat")}><MessageSquare size={19}/></button>
+      <button type="button" data-tour="library" className={`rail-button ${view === "library" ? "selected" : ""}`} title="Library" onClick={() => setView("library")}><FolderOpen size={19}/></button>
       <div className="rail-spacer"/>
-      <button className="rail-button" title="Help"><CircleHelp size={18}/></button>
-      <button type="button" className={`avatar ${view === "profile" ? "selected" : ""}`} onClick={() => setView("profile")} title="Your profile" aria-label="Open your profile" aria-current={view === "profile" ? "page" : undefined}><span>{user.name?.trim()?.[0]?.toUpperCase() || "U"}</span></button>
+      <button type="button" className="rail-button" title="Take a tour" aria-label="Take a tour" onClick={() => { setView("home"); setShowOnboarding(true); }}><CircleHelp size={18}/></button>
+      <button type="button" data-tour="profile" className={`avatar ${view === "profile" ? "selected" : ""}`} onClick={() => setView("profile")} title="Your profile" aria-label="Open your profile" aria-current={view === "profile" ? "page" : undefined}>{user.avatar_data ? <img src={user.avatar_data} alt=""/> : <span>{user.name?.trim()?.[0]?.toUpperCase() || "U"}</span>}</button>
       <button type="button" className="rail-button rail-signout" onClick={handleLogout} title="Sign out" aria-label="Sign out"><LogOut size={17}/></button>
     </aside>
 
@@ -188,13 +201,14 @@ export default function App() {
 
       {view === "library" && <LibraryPage {...{documents, category, setCategory, categoryCards, query, setQuery, chatTurns, openThread, visibleDocs, openSource, setShowAddMenu, setView, getIcon}} />}
 
-      {view === "chat" && <ChatPage {...{activeSource, setActiveSource, getIcon, sourceMessages, inputMessage, setInputMessage, sendMessage, isTyping, messagesEndRef, setView, chatTurns, chatKey, openThread, documents, openSource, getKind}} />}
+      {view === "chat" && <ChatPage {...{activeSource, setActiveSource, getIcon, sourceMessages, inputMessage, setInputMessage, sendMessage, isTyping, messagesEndRef, setView, chatTurns, chatKey, openThread, documents, openSource, getKind, user}} />}
 
-      {view === "profile" && <ProfilePage user={user} sourceCount={documents.length} threadCount={chatTurns.length} onBack={goHome} onLogout={handleLogout} />}
+      {view === "profile" && <ProfilePage user={user} sourceCount={documents.length} threadCount={chatTurns.length} onBack={goHome} onLogout={handleLogout} onAvatarChange={handleAvatarChange} />}
     </main>
 
     {showAddMenu && <AddSourceModal {...{setShowAddMenu, processing, processStatus, uploadFile, addUrl}} />}
-    <button className="floating-add" onClick={()=>setShowAddMenu(true)} disabled={processing}><Plus size={19}/><span>{processing ? processStatus : "Add to your space"}</span></button>
+    <button data-tour="add" className="floating-add" onClick={()=>setShowAddMenu(true)} disabled={processing}><Plus size={19}/><span>{processing ? processStatus : "Add to your space"}</span></button>
+    {showOnboarding && <OnboardingTour onClose={() => setShowOnboarding(false)} onNavigate={setView} userId={user.id}/>}
   </div>;
 }
 
