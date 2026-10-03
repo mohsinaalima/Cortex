@@ -1,11 +1,12 @@
 import { useState } from "react";
 import axios from "axios";
 import { ArrowRight, BrainCircuit, Eye, EyeOff, FileText, Image as ImageIcon, Link, LoaderCircle, LockKeyhole, Mail, MessageCircle, Sparkles } from "lucide-react";
+import OAuthButtons from "./OAuthButtons.jsx";
 import "./AuthPage.css";
 
 const API_BASE = "http://127.0.0.1:8000";
 
-export default function AuthPage({ initialMode = "register", onAuthenticated, onBack }) {
+export default function AuthPage({ initialMode = "register", onAuthenticated, onBack, providerError }) {
   const [mode, setMode] = useState(initialMode);
   const [name, setName] = useState("");
   const [email, setEmail] = useState("");
@@ -46,6 +47,9 @@ export default function AuthPage({ initialMode = "register", onAuthenticated, on
       <div className="auth-mobile-brand"><span><BrainCircuit size={18}/></span><strong>Cortex</strong></div>
       <div className="auth-heading"><span className="auth-small-label">A PLACE FOR YOUR CURIOSITY</span><h2>{isRegister ? "Start your space." : "Welcome back."}</h2><p>{isRegister ? "Sign up and let your ideas find each other." : "Pick up where your thinking left off."}</p></div>
       <div className="auth-tabs" role="tablist" aria-label="Account access"><button type="button" role="tab" aria-selected={isRegister} className={isRegister ? "active" : ""} onClick={()=>{setMode("register");setError("");}}>Create account</button><button type="button" role="tab" aria-selected={!isRegister} className={!isRegister ? "active" : ""} onClick={()=>{setMode("login");setError("");}}>Sign in</button></div>
+      {providerError&&<div className="auth-error oauth-error" role="alert"><span>!</span>{providerError}</div>}
+      <OAuthButtons />
+      <div className="auth-divider"><i/> or continue with email <i/></div>
       <form className="auth-form" onSubmit={submit}>
         {isRegister && <label className="auth-field"><span>Your name</span><div className="auth-input"><span className="field-monogram">{name.trim()?.[0]?.toUpperCase() || "✳"}</span><input type="text" name="name" value={name} onChange={e=>setName(e.target.value)} placeholder="How should Cortex address you?" autoComplete="name" maxLength={80} required/></div></label>}
         <label className="auth-field"><span>Email address</span><div className="auth-input"><Mail size={16}/><input type="email" name="email" value={email} onChange={e=>setEmail(e.target.value)} placeholder="you@example.com" autoComplete="email" maxLength={254} required/></div></label>

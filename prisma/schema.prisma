@@ -11,13 +11,26 @@ model User {
   id           String        @id @default(uuid())
   name         String
   email        String        @unique
-  passwordHash String
+  passwordHash String?
   createdAt    DateTime      @default(now())
   updatedAt    DateTime      @updatedAt
   sources      Source[]
   chatSessions ChatSession[]
+  oauthAccounts OAuthAccount[]
 
   @@index([createdAt])
+}
+
+model OAuthAccount {
+  id             String   @id @default(uuid())
+  provider       String
+  providerUserId String
+  userId         String
+  createdAt      DateTime @default(now())
+  user           User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([provider, providerUserId])
+  @@index([userId])
 }
 
 model Source {

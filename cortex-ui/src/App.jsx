@@ -11,6 +11,14 @@ import "./components/Rail.css";
 import { Box, BrainCircuit, ChevronRight, CircleHelp, Command, FileText, FolderOpen, Image as ImageIcon, Link, LogOut, MessageCircle, MessageSquare, MoreHorizontal, Plus, Search } from "lucide-react";
 
 const API_BASE = "http://127.0.0.1:8000";
+const OAUTH_ERRORS = {
+  provider_setup: "This sign-in provider is not configured yet. Add its client ID and secret to the backend .env file.",
+  cancelled: "Sign-in was cancelled. You can try again or use email and password.",
+  invalid_state: "This sign-in attempt expired or could not be verified. Please try again.",
+  unverified_email: "The provider did not return a verified email address for this account.",
+  provider_failed: "The provider could not complete sign-in. Please try again.",
+  account_link_failed: "We couldn’t connect this provider to your Cortex account. Please try again.",
+};
 const readStore = (key, fallback) => {
   try { return JSON.parse(localStorage.getItem(key)) ?? fallback; } catch { return fallback; }
 };
@@ -18,8 +26,9 @@ const readStore = (key, fallback) => {
 export default function App() {
   const [documents, setDocuments] = useState([]);
   const [user, setUser] = useState(null);
-  const [authLoading, setAuthLoading] = useState(() => Boolean(localStorage.getItem("cortex_access_token")));
-  const [authMode, setAuthMode] = useState(null);
+  const [authLoading, setAuthLoading] = useState(() => Boolean(localStorage.getItem("cortex_access_token") || new URLSearchParams(window.location.search).has("oauth_code")));
+  const [authMode, setAuthMode] = useState(() => new URLSearchParams(window.location.search).has("oauth_error") ? "login" : null);
+  const [oauthError, setOauthError] = useState(() => OAUTH_ERRORS[new URLSearchParams(window.location.search).get("oauth_error")] || "");
   const [processing, setProcessing] = useState(false);
   const [processStatus, setProcessStatus] = useState("");
   const [activeSource, setActiveSource] = useState(null);
@@ -34,6 +43,22 @@ export default function App() {
   const chatKey = activeSource?.document_id || "global";
 
   useEffect(() => {
+    const currentUrl = new URL(window.location.href);
+    const oauthCode = currentUrl.searchParams.get("oauth_code");
+    const oauthFailure = currentUrl.searchParams.get("oauth_error");
+    if (oauthCode || oauthFailure) {
+      window.history.replaceState({}, document.title, currentUrl.pathname);
+      if (oauthCode) {
+        axios.post(`${API_BASE}/auth/oauth/exchange`, { code: oauthCode })
+          .then(({ data }) => handleAuthenticated(data))
+          .catch((error) => {
+            setAuthMode("login");
+            setOauthError(error.response?.data?.detail || "This sign-in link expired. Please try again.");
+          })
+          .finally(() => setAuthLoading(false));
+      }
+      return;
+    }
     const token = localStorage.getItem("cortex_access_token");
     if (!token) return;
     axios.defaults.headers.common.Authorization = `Bearer ${token}`;
@@ -137,7 +162,7 @@ export default function App() {
 
   if (authLoading) return <div className="auth-loading"><span className="auth-loading-mark"><BrainCircuit size={22}/></span><span>Opening your Cortex…</span></div>;
   if (!user) return authMode
-    ? <AuthPage initialMode={authMode} onAuthenticated={handleAuthenticated} onBack={() => setAuthMode(null)} />
+    ? <AuthPage initialMode={authMode} onAuthenticated={handleAuthenticated} onBack={() => { setAuthMode(null); setOauthError(""); }} providerError={oauthError} />
     : <LandingPage onSignUp={() => setAuthMode("register")} onLogin={() => setAuthMode("login")} />;
 
   return <div className="app-shell">

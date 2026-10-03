@@ -35,6 +35,8 @@ def hash_password(password: str) -> str:
 
 
 def verify_password(password: str, encoded: str) -> bool:
+    if not isinstance(encoded, str):
+        return False
     try:
         algorithm, n, r, p, salt, expected = encoded.split("$", 5)
         if algorithm != "scrypt":

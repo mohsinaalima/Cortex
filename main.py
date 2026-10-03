@@ -4,12 +4,17 @@ import uuid
 import re
 import json
 import base64
+import hashlib
+import secrets
+import time
+from urllib.parse import urlencode
 import requests
 from bs4 import BeautifulSoup
 from typing import List, Optional
 
 from fastapi import FastAPI, UploadFile, File, HTTPException, Depends
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
+from fastapi.responses import RedirectResponse
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 from pypdf import PdfReader
@@ -117,9 +122,14 @@ class LoginRequest(BaseModel):
     email: str
     password: str
 
+class OAuthCodeRequest(BaseModel):
+    code: str
+
 
 chat_sessions = {}
 document_registry = {}
+oauth_states = {}
+pending_oauth_codes = {}
 
 
 def get_db_connection():
@@ -208,6 +218,168 @@ def login_user(payload: LoginRequest):
 @app.get("/auth/me")
 def get_my_account(user: dict = Depends(get_current_user)):
     return public_user(user)
+
+
+def oauth_urls(provider: str):
+    frontend = os.getenv("FRONTEND_URL", "http://localhost:5173").rstrip("/")
+    api = os.getenv("API_PUBLIC_URL", "http://127.0.0.1:8000").rstrip("/")
+    settings = {
+        "google": {
+            "client_id": os.getenv("GOOGLE_CLIENT_ID"),
+            "client_secret": os.getenv("GOOGLE_CLIENT_SECRET"),
+            "authorize": "https://accounts.google.com/o/oauth2/v2/auth",
+            "token": "https://oauth2.googleapis.com/token",
+            "redirect": f"{api}/auth/oauth/google/callback",
+        },
+    }
+    config = settings.get(provider)
+    if config:
+        config["frontend"] = frontend
+    return config
+
+
+def oauth_failure(frontend: str, reason: str):
+    return RedirectResponse(f"{frontend}/?oauth_error={reason}", status_code=302)
+
+
+def get_or_create_oauth_user(provider: str, provider_user_id: str, email: str, name: str) -> dict:
+    try:
+        with get_db_connection() as conn, conn.cursor() as cur:
+            cur.execute(
+                '''SELECT u."id", u."name", u."email" FROM "OAuthAccount" a
+                   JOIN "User" u ON u."id" = a."userId"
+                   WHERE a."provider" = %s AND a."providerUserId" = %s''',
+                (provider, provider_user_id),
+            )
+            row = cur.fetchone()
+            if row:
+                return row
+
+            cur.execute('SELECT "id", "name", "email" FROM "User" WHERE "email" = %s', (email,))
+            row = cur.fetchone()
+            if not row:
+                user_id = str(uuid.uuid4())
+                cur.execute(
+                    '''INSERT INTO "User" ("id", "name", "email", "passwordHash", "createdAt", "updatedAt")
+                       VALUES (%s, %s, %s, NULL, NOW(), NOW())
+                       RETURNING "id", "name", "email"''',
+                    (user_id, name[:80] or email.split("@", 1)[0], email),
+                )
+                row = cur.fetchone()
+            cur.execute(
+                '''INSERT INTO "OAuthAccount" ("id", "provider", "providerUserId", "userId", "createdAt")
+                   VALUES (%s, %s, %s, %s, NOW())''',
+                (str(uuid.uuid4()), provider, provider_user_id, row["id"]),
+            )
+            return row
+    except psycopg.errors.UniqueViolation:
+        # Concurrent callbacks for the same identity can race on the unique keys.
+        with get_db_connection() as conn, conn.cursor() as cur:
+            cur.execute(
+                '''SELECT u."id", u."name", u."email" FROM "OAuthAccount" a
+                   JOIN "User" u ON u."id" = a."userId"
+                   WHERE a."provider" = %s AND a."providerUserId" = %s''',
+                (provider, provider_user_id),
+            )
+            row = cur.fetchone()
+            if row:
+                return row
+        raise HTTPException(status_code=409, detail="This social account could not be linked. Please try again.")
+
+
+@app.get("/auth/oauth/{provider}/start")
+def start_oauth(provider: str):
+    config = oauth_urls(provider)
+    if not config:
+        raise HTTPException(status_code=404, detail="Unsupported sign-in provider.")
+    if not config["client_id"] or not config["client_secret"]:
+        return oauth_failure(config["frontend"], "provider_setup")
+
+    state = secrets.token_urlsafe(32)
+    verifier = secrets.token_urlsafe(48)
+    challenge = base64.urlsafe_b64encode(hashlib.sha256(verifier.encode("ascii")).digest()).decode("ascii").rstrip("=")
+    now = time.time()
+    for old_state in [key for key, value in oauth_states.items() if value["expires_at"] <= now]:
+        oauth_states.pop(old_state, None)
+    oauth_states[state] = {"provider": provider, "verifier": verifier, "expires_at": now + 600}
+
+    params = {
+        "client_id": config["client_id"],
+        "redirect_uri": config["redirect"],
+        "response_type": "code",
+        "scope": "openid email profile",
+        "state": state,
+        "code_challenge": challenge,
+        "code_challenge_method": "S256",
+    }
+    return RedirectResponse(f"{config['authorize']}?{urlencode(params)}", status_code=302)
+
+
+@app.get("/auth/oauth/{provider}/callback")
+def finish_oauth(provider: str, code: Optional[str] = None, state: Optional[str] = None, error: Optional[str] = None):
+    config = oauth_urls(provider)
+    if not config:
+        raise HTTPException(status_code=404, detail="Unsupported sign-in provider.")
+    if error:
+        return oauth_failure(config["frontend"], "cancelled")
+    flow = oauth_states.pop(state, None) if state else None
+    if not code or not flow or flow["provider"] != provider or flow["expires_at"] <= time.time():
+        return oauth_failure(config["frontend"], "invalid_state")
+
+    try:
+        token_response = requests.post(
+            config["token"],
+            headers={"Accept": "application/json"},
+            data={
+                "client_id": config["client_id"],
+                "client_secret": config["client_secret"],
+                "code": code,
+                "redirect_uri": config["redirect"],
+                "code_verifier": flow["verifier"],
+                "grant_type": "authorization_code",
+            },
+            timeout=15,
+        )
+        token_response.raise_for_status()
+        access_token = token_response.json().get("access_token")
+        if not access_token:
+            return oauth_failure(config["frontend"], "provider_failed")
+
+        headers = {"Authorization": f"Bearer {access_token}", "Accept": "application/json"}
+        profile_response = requests.get("https://openidconnect.googleapis.com/v1/userinfo", headers=headers, timeout=15)
+        profile_response.raise_for_status()
+        profile = profile_response.json()
+        email = (profile.get("email") or "").strip().lower()
+        if not profile.get("sub") or not profile.get("email_verified") or not email:
+            return oauth_failure(config["frontend"], "unverified_email")
+        provider_user_id = str(profile["sub"])
+        name = profile.get("name") or email.split("@", 1)[0]
+
+        user = get_or_create_oauth_user(provider, provider_user_id, email, name)
+        for old_code in [key for key, value in pending_oauth_codes.items() if value["expires_at"] <= time.time()]:
+            pending_oauth_codes.pop(old_code, None)
+        handoff_code = secrets.token_urlsafe(32)
+        pending_oauth_codes[handoff_code] = {"user_id": user["id"], "expires_at": time.time() + 120}
+        return RedirectResponse(f"{config['frontend']}/?oauth_code={handoff_code}", status_code=302)
+    except requests.RequestException:
+        return oauth_failure(config["frontend"], "provider_failed")
+    except (ValueError, KeyError, TypeError):
+        return oauth_failure(config["frontend"], "provider_failed")
+    except HTTPException:
+        return oauth_failure(config["frontend"], "account_link_failed")
+
+
+@app.post("/auth/oauth/exchange")
+def exchange_oauth_code(payload: OAuthCodeRequest):
+    handoff = pending_oauth_codes.pop(payload.code, None)
+    if not handoff or handoff["expires_at"] <= time.time():
+        raise HTTPException(status_code=401, detail="This sign-in link expired. Please try again.")
+    with get_db_connection() as conn, conn.cursor() as cur:
+        cur.execute('SELECT "id", "name", "email" FROM "User" WHERE "id" = %s', (handoff["user_id"],))
+        row = cur.fetchone()
+    if not row:
+        raise HTTPException(status_code=401, detail="The account could not be found. Please try again.")
+    return create_auth_response(row)
 
 
 def save_source(source: dict) -> None:
