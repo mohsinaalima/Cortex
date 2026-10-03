@@ -7,6 +7,7 @@ import base64
 import hashlib
 import secrets
 import time
+from threading import Lock
 from urllib.parse import urlencode
 import requests
 from bs4 import BeautifulSoup
@@ -23,7 +24,6 @@ import psycopg
 from psycopg.rows import dict_row
 
 # Machine Learning & AI
-from sentence_transformers import SentenceTransformer, CrossEncoder
 from openai import OpenAI
 
 # Vector Database
@@ -75,14 +75,10 @@ app.add_middleware(
 )
 
 
-print("Loading embedding model (Bi-Encoder)...")
-embedding_model = SentenceTransformer("all-MiniLM-L6-v2")
 VECTOR_SIZE = 384
-print("Embedding model loaded!")
-
-print("Loading reranker model (Cross-Encoder)...")
-reranker_model = CrossEncoder("cross-encoder/ms-marco-MiniLM-L-6-v2")
-print("Reranker loaded!")
+embedding_model = None
+embedding_model_lock = Lock()
+embedding_call_lock = Lock()
 
 print("Initializing Qdrant...")
 qdrant = QdrantClient(path="./qdrant_storage")
@@ -99,6 +95,11 @@ else:
     print(f"Qdrant collection already exists: {COLLECTION_NAME}")
 
 print("Qdrant ready!")
+
+
+@app.get("/health")
+def health_check():
+    return {"status": "ok"}
 
 
 class URLRequest(BaseModel):
@@ -569,8 +570,31 @@ def chunk_text(text: str, chunk_size: int = 500, chunk_overlap: int = 100) -> Li
     return chunks
 
 def create_embedding(text: str) -> List[float]:
-    vector = embedding_model.encode(text, normalize_embeddings=True)
+    global embedding_model
+    with embedding_model_lock:
+        if embedding_model is None:
+            # Keep Torch's CPU worker pools small on low-memory instances.
+            os.environ.setdefault("TOKENIZERS_PARALLELISM", "false")
+            os.environ.setdefault("OMP_NUM_THREADS", "1")
+            os.environ.setdefault("MKL_NUM_THREADS", "1")
+            import torch
+            from sentence_transformers import SentenceTransformer
+
+            torch.set_num_threads(1)
+            print("Loading the text embedding model on first use...")
+            embedding_model = SentenceTransformer("all-MiniLM-L6-v2", device="cpu")
+            print("Text embedding model is ready.")
+    # Serialize inference to avoid simultaneous requests multiplying peak RAM use.
+    with embedding_call_lock:
+        vector = embedding_model.encode(text, normalize_embeddings=True, show_progress_bar=False)
     return vector.tolist()
+
+
+async def read_upload_limited(file: UploadFile, max_bytes: int = 8 * 1024 * 1024) -> bytes:
+    content = await file.read(max_bytes + 1)
+    if len(content) > max_bytes:
+        raise HTTPException(status_code=413, detail="Files must be 8 MB or smaller on this plan.")
+    return content
 
 def rewrite_query(current_question: str, history: List[dict]) -> str:
     if not history:
@@ -659,7 +683,7 @@ async def upload_document(file: UploadFile = File(...), user: dict = Depends(get
     filename = file.filename
     
     try:
-        file_content = await file.read()
+        file_content = await read_upload_limited(file)
         document_id = str(uuid.uuid4())
         extracted_pages = extract_text_from_file(file_content, filename)
         if not extracted_pages:
@@ -770,7 +794,7 @@ async def upload_image(file: UploadFile = File(...), user: dict = Depends(get_cu
         raise HTTPException(status_code=400, detail="Unsupported image format.")
         
     try:
-        file_content = await file.read()
+        file_content = await read_upload_limited(file)
         base64_image = base64.b64encode(file_content).decode("utf-8")
         mime_type = "image/jpeg" if extension in [".jpg", ".jpeg"] else f"image/{extension[1:]}"
         
@@ -838,7 +862,7 @@ async def chat_with_document(request: ChatRequest, user: dict = Depends(get_curr
             collection_name=COLLECTION_NAME,
             query=query_vector,
             query_filter=query_filter,
-            limit=15,
+            limit=8,
             score_threshold=0.20,
             with_payload=True,
         )
@@ -848,22 +872,16 @@ async def chat_with_document(request: ChatRequest, user: dict = Depends(get_curr
             save_chat_exchange(session_id, user["id"], request.question, answer, request.filename)
             return {"question": request.question, "answer": answer, "sources_map": {}, "session_id": session_id}
 
-        cross_encoder_inputs = [[request.question, pt.payload.get("text", "")] for pt in search_results.points if pt.payload.get("text")]
-        
-        if not cross_encoder_inputs:
+        ranked_points = sorted(search_results.points, key=lambda point: point.score or 0, reverse=True)
+        if not any(pt.payload.get("text") for pt in ranked_points):
             answer = "No readable content found."
             save_chat_exchange(session_id, user["id"], request.question, answer, request.filename)
             return {"question": request.question, "answer": answer, "sources_map": {}, "session_id": session_id}
 
-        rerank_scores = reranker_model.predict(cross_encoder_inputs)
-        scored_points = [{"point": pt, "rerank_score": float(rerank_scores[i])} for i, pt in enumerate(search_results.points)]
-        scored_points.sort(key=lambda x: x["rerank_score"], reverse=True)
-        top_3 = scored_points[:3]
-
         retrieved_texts, sources_map = [], {}
-        for i, item in enumerate(top_3):
+        for i, point in enumerate(ranked_points[:3]):
             source_id = i + 1
-            payload = item["point"].payload
+            payload = point.payload
             text = payload.get("text", "")
             filename = payload.get("filename", "Unknown")
             retrieved_texts.append(f"[Source {source_id}]\nDocument: {filename}\nContent:\n{text}\n")
