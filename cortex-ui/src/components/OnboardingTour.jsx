@@ -18,7 +18,6 @@ export default function OnboardingTour({ onClose, onNavigate, userId }) {
 
   useEffect(() => {
     onNavigate(step.view);
-    setGeometry(null);
     const timer = window.setTimeout(() => {
       const target = document.querySelector(`[data-tour="${step.id}"]`);
       if (!target) return;
@@ -43,9 +42,17 @@ export default function OnboardingTour({ onClose, onNavigate, userId }) {
 
   useEffect(() => {
     const handleKeys = (event) => {
-      if (event.key === "ArrowRight" || event.key === "Enter") move(1);
-      if (event.key === "ArrowLeft") move(-1);
-      if (event.key === "Escape") finish();
+      if (event.key === "ArrowRight" || event.key === "Enter") {
+        if (index >= steps.length - 1) {
+          localStorage.setItem(`cortex_tour_completed_${userId}`, "true");
+          onClose();
+        } else setIndex((current) => current + 1);
+      }
+      if (event.key === "ArrowLeft") setIndex((current) => Math.max(0, current - 1));
+      if (event.key === "Escape") {
+        localStorage.setItem(`cortex_tour_completed_${userId}`, "true");
+        onClose();
+      }
     };
     window.addEventListener("keydown", handleKeys);
     return () => window.removeEventListener("keydown", handleKeys);

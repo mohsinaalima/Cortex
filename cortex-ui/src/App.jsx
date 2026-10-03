@@ -12,7 +12,7 @@ import "./components/UserAvatar.css";
 import "./components/Rail.css";
 import { Box, BrainCircuit, ChevronRight, CircleHelp, Command, FileText, FolderOpen, Image as ImageIcon, Link, LogOut, MessageCircle, MessageSquare, MoreHorizontal, Plus, Search } from "lucide-react";
 
-const API_BASE = "http://127.0.0.1:8000";
+const API_BASE = (import.meta.env.VITE_API_BASE || "http://127.0.0.1:8000").replace(/\/$/, "");
 const OAUTH_ERRORS = {
   provider_setup: "This sign-in provider is not configured yet. Add its client ID and secret to the backend .env file.",
   cancelled: "Sign-in was cancelled. You can try again or use email and password.",
